@@ -1,3 +1,5 @@
+import { effectTail, normalizeEffects, type AudioEffect } from './effects'
+
 export type TrackKind = 'beat' | 'lead' | 'double' | 'harmony' | 'adlib'
 
 export interface Clip {
@@ -19,10 +21,11 @@ export interface Track {
   muted: boolean
   solo: boolean
   clips: Clip[]
+  effects: AudioEffect[]
 }
 
 export interface Project {
-  version: 1
+  version: 2
   id: string
   name: string
   bpm: number
@@ -63,12 +66,13 @@ export function createTrack(kind: TrackKind): Track {
     muted: false,
     solo: false,
     clips: [],
+    effects: [],
   }
 }
 
 export function createProject(): Project {
   return {
-    version: 1,
+    version: 2,
     id: crypto.randomUUID(),
     name: 'Mi primera sesión',
     bpm: 90,
@@ -85,6 +89,30 @@ export function projectDuration(project: Project): number {
 
 export function isAudible(track: Track, tracks: Track[]): boolean {
   return !track.muted && (!tracks.some((t) => t.solo) || track.solo)
+}
+
+export function projectPlaybackDuration(project: Project): number {
+  return Math.max(
+    projectDuration(project),
+    ...project.tracks.map((track) =>
+      track.clips.length && isAudible(track, project.tracks)
+        ? Math.max(...track.clips.map((clip) => clip.start + clip.duration)) +
+          effectTail(track.effects)
+        : 0,
+    ),
+  )
+}
+
+/** Version 1 sessions keep their audio, timing and mixer values; effects start empty. */
+export function migrateProject(project: Project): Project {
+  const version: number = project.version
+  if (version !== 1 && version !== 2)
+    throw new Error('La versión de este proyecto no es compatible.')
+  return {
+    ...project,
+    version: 2,
+    tracks: project.tracks.map((track) => ({ ...track, effects: normalizeEffects(track.effects) })),
+  }
 }
 
 export function formatTime(seconds: number, precise = false): string {

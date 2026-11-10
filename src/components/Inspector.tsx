@@ -3,6 +3,7 @@ import type { Studio } from '../hooks/useStudio'
 import { audioEngine } from '../audio/AudioEngine'
 import { dbLabel, formatTime, MAX_SECONDS, trackKinds } from '../model/project'
 import { LevelMeter } from './Mixer'
+import { EffectsPanel } from './EffectsPanel'
 
 export function Inspector({ studio, onClose }: { studio: Studio; onClose: () => void }) {
   const track = studio.selectedTrack
@@ -98,6 +99,7 @@ export function Inspector({ studio, onClose }: { studio: Studio; onClose: () => 
             </div>
           </div>
         </section>
+        <EffectsPanel key={track.id} studio={studio} />
         <section className="inspector-section" aria-label="Entrada y salida">
           <h3>Entrada y salida</h3>
           <dl className="routing-details">
@@ -214,10 +216,6 @@ export function Inspector({ studio, onClose }: { studio: Studio; onClose: () => 
               Selecciona un clip en el timeline para editar su nombre, posición y recorte.
             </p>
           )}
-        </section>
-        <section className="inspector-section">
-          <h3>Efectos</h3>
-          <p className="microcopy">No disponibles en esta versión.</p>
         </section>
       </div>
     </aside>

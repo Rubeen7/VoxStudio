@@ -470,7 +470,7 @@
 }
 .track-row {
   display: flex;
-  height: 80px;
+  height: 72px;
   border-bottom: 1px solid #383d44;
 }
 .track-controls {
@@ -599,7 +599,7 @@
 .audio-clip {
   position: absolute;
   top: 5px;
-  height: 69px;
+  height: 61px;
   padding: 0;
   overflow: hidden;
   text-align: left;
@@ -643,13 +643,13 @@
 .waveform {
   display: block;
   width: 100%;
-  height: 46px;
+  height: 38px;
   pointer-events: none;
 }
 .recording-clip {
   position: absolute;
   top: 5px;
-  height: 69px;
+  height: 61px;
   border: 1px solid #aa6b76;
   border-radius: 2px;
   background: #5e343c;
@@ -751,7 +751,7 @@
 
 /* Compact channel strips. The only meter is the real master output. */
 .mixer {
-  height: 205px;
+  height: 186px;
   flex-shrink: 0;
   border-top: 1px solid #141619;
   background: #25282c;
@@ -781,7 +781,7 @@
 }
 .mixer-body {
   display: flex;
-  height: 172px;
+  height: 153px;
   min-width: 0;
 }
 .mixer-channels {
@@ -824,9 +824,6 @@
   font: 9px var(--mono);
   color: #939ba8;
 }
-.mixer-channel-name i {
-  display: none;
-}
 .channel-pan {
   display: flex;
   align-items: center;
@@ -848,7 +845,7 @@
   display: flex;
   justify-content: center;
   gap: 12px;
-  height: 78px;
+  height: 64px;
   margin-top: 3px;
 }
 .fader-scale {
@@ -865,25 +862,22 @@
   top: 0;
 }
 .fader-scale span:nth-child(2) {
-  top: 25%;
+  top: 33.333%;
 }
 .fader-scale span:nth-child(3) {
-  top: 76%;
-}
-.fader-scale span:nth-child(4) {
   bottom: 0;
 }
 .mixer-fader {
   display: flex;
   justify-content: center;
-  height: 78px;
+  height: 64px;
   width: 12px;
 }
 .mixer-fader input {
   writing-mode: vertical-lr;
   direction: rtl;
   width: 3px;
-  height: 78px;
+  height: 64px;
   margin: 0;
 }
 .mixer-fader input::-webkit-slider-thumb {

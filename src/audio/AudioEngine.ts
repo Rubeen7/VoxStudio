@@ -1,5 +1,13 @@
 import type { Project } from '../model/project'
-import { clipWindow, isAudible, MAX_SECONDS, projectDuration } from '../model/project'
+import {
+  clipWindow,
+  isAudible,
+  MAX_SECONDS,
+  projectDuration,
+  projectPlaybackDuration,
+} from '../model/project'
+import { MAX_EFFECT_TAIL } from '../model/effects'
+import { prepareEffects } from './effects'
 import { encodeWav } from './wav'
 import recorderUrl from './recorder.worklet.js?url'
 import { createTrackChannel, type TrackChannel } from './graph'
@@ -19,6 +27,7 @@ export class AudioEngine {
   private context?: AudioContext
   private master?: GainNode
   private analyser?: AnalyserNode
+  private tailGate?: GainNode
   private sources: AudioBufferSourceNode[] = []
   private channels = new Map<string, TrackChannel>()
   private buffers = new Map<string, AudioBuffer>()
@@ -62,8 +71,9 @@ export class AudioEngine {
       this.context = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 })
       this.master = this.context.createGain()
       this.analyser = this.context.createAnalyser()
+      this.tailGate = this.context.createGain()
       this.analyser.fftSize = 2048
-      this.master.connect(this.analyser).connect(this.context.destination)
+      this.master.connect(this.tailGate).connect(this.analyser).connect(this.context.destination)
       this.context.onstatechange = () => {
         if (
           this.context?.state !== 'running' &&
@@ -80,6 +90,7 @@ export class AudioEngine {
     if (context.state !== 'running') await context.resume()
     if (context.state !== 'running')
       throw new Error('El navegador ha suspendido el audio. Pulsa Reproducir de nuevo.')
+    await prepareEffects(context)
     return context
   }
 
@@ -101,12 +112,15 @@ export class AudioEngine {
     this.channels.clear()
   }
 
-  private schedule(project: Project, position: number, when: number) {
+  private schedule(project: Project, position: number, when: number, includeTailFade = true) {
     const context = this.getContext()
     this.clearSources()
     this.offset = position
     this.anchor = when
     this.master!.gain.value = project.masterVolume
+    this.tailGate!.gain.cancelScheduledValues(context.currentTime)
+    this.tailGate!.gain.setValueAtTime(1, context.currentTime)
+    if (includeTailFade) this.scheduleTailFade(project)
     for (const track of project.tracks) {
       const channel = createTrackChannel(context, track, project, this.master!)
       this.channels.set(track.id, channel)
@@ -116,7 +130,7 @@ export class AudioEngine {
         if (!buffer || !window) continue
         const source = context.createBufferSource()
         source.buffer = buffer
-        source.connect(channel.gain)
+        source.connect(channel.input)
         source.start(
           when + window.delay,
           window.offset,
@@ -124,6 +138,21 @@ export class AudioEngine {
         )
         this.sources.push(source)
       }
+    }
+  }
+
+  private scheduleTailFade(project: Project) {
+    const context = this.getContext()
+    const gain = this.tailGate!.gain
+    const duration = projectPlaybackDuration(project)
+    gain.cancelScheduledValues(context.currentTime)
+    gain.setValueAtTime(1, context.currentTime)
+    if (duration <= projectDuration(project)) return
+    const end = this.anchor + duration - this.offset
+    const start = this.anchor + Math.max(projectDuration(project), duration - 0.03) - this.offset
+    if (end > context.currentTime) {
+      gain.setValueAtTime(1, Math.max(context.currentTime, start))
+      gain.linearRampToValueAtTime(0, end)
     }
   }
 
@@ -147,7 +176,7 @@ export class AudioEngine {
 
   seek(position: number, project: Project) {
     if (this.stateValue === 'recording') return
-    this.offset = Math.max(0, Math.min(MAX_SECONDS, position))
+    this.offset = Math.max(0, Math.min(MAX_SECONDS + MAX_EFFECT_TAIL, position))
     if (this.stateValue === 'playing')
       this.schedule(project, this.offset, this.getContext().currentTime + 0.02)
   }
@@ -163,7 +192,9 @@ export class AudioEngine {
         0.01,
       )
       channel?.pan.pan.setTargetAtTime(track.pan, now, 0.01)
+      channel?.updateEffects(track.effects)
     }
+    if (this.stateValue === 'playing') this.scheduleTailFade(project)
   }
 
   reschedule(project: Project) {
@@ -251,7 +282,7 @@ export class AudioEngine {
         startFrame,
         endFrame: startFrame + Math.floor(maxDuration * context.sampleRate),
       })
-      this.schedule(project, position, startFrame / context.sampleRate)
+      this.schedule(project, position, startFrame / context.sampleRate, false)
       this.stateValue = 'recording'
     } catch (error) {
       stream?.getTracks().forEach((track) => track.stop())
@@ -311,34 +342,54 @@ export class AudioEngine {
   }
 
   async render(project: Project): Promise<{ blob: Blob; peak: number }> {
-    const duration = projectDuration(project)
-    if (!duration) throw new Error('Añade audio antes de exportar la mezcla.')
-    if (duration > MAX_SECONDS) throw new Error('La sesión supera el límite de 15 minutos.')
+    const audioDuration = projectDuration(project)
+    const duration = projectPlaybackDuration(project)
+    if (!audioDuration) throw new Error('Añade audio antes de exportar la mezcla.')
+    if (audioDuration > MAX_SECONDS) throw new Error('La sesión supera el límite de 15 minutos.')
     const sampleRate = 48000
     const offline = new OfflineAudioContext(2, Math.ceil(duration * sampleRate), sampleRate)
+    await prepareEffects(offline)
     const master = offline.createGain()
     master.gain.value = project.masterVolume
     master.connect(offline.destination)
-    for (const track of project.tracks) {
-      const channel = createTrackChannel(offline, track, project, master)
-      for (const clip of track.clips) {
-        const buffer = this.buffers.get(clip.assetId)
-        const window = clipWindow(clip, 0)
-        if (!buffer || !window)
-          throw new Error('Falta el audio de un clip. Vuelve a abrir el proyecto.')
-        const source = offline.createBufferSource()
-        source.buffer = buffer
-        source.connect(channel.gain)
-        source.start(window.delay, window.offset, window.duration)
-      }
+    // A bounded final fade avoids a discontinuity if a long serial delay chain reaches the tail limit.
+    if (duration > audioDuration) {
+      master.gain.setValueAtTime(project.masterVolume, Math.max(audioDuration, duration - 0.03))
+      master.gain.linearRampToValueAtTime(0, duration)
     }
-    const result = await offline.startRendering()
-    const channels = [result.getChannelData(0), result.getChannelData(1)]
-    let peak = 0
-    channels.forEach((channel) => {
-      for (const sample of channel) peak = Math.max(peak, Math.abs(sample))
-    })
-    return { blob: new Blob([encodeWav(channels, sampleRate)], { type: 'audio/wav' }), peak }
+    const channelsToDispose: TrackChannel[] = []
+    try {
+      for (const track of project.tracks) {
+        const channel = createTrackChannel(offline, track, project, master)
+        channelsToDispose.push(channel)
+        for (const clip of track.clips) {
+          const buffer = this.buffers.get(clip.assetId)
+          const window = clipWindow(clip, 0)
+          if (!buffer || !window)
+            throw new Error('Falta el audio de un clip. Vuelve a abrir el proyecto.')
+          const source = offline.createBufferSource()
+          source.buffer = buffer
+          source.connect(channel.input)
+          source.start(window.delay, window.offset, window.duration)
+        }
+      }
+      const result = await offline.startRendering()
+      const channels = [result.getChannelData(0), result.getChannelData(1)]
+      let peak = 0
+      channels.forEach((channel) => {
+        for (const sample of channel) {
+          if (!Number.isFinite(sample))
+            throw new Error(
+              'El procesamiento produjo audio no válido. Revisa la cadena de efectos.',
+            )
+          peak = Math.max(peak, Math.abs(sample))
+        }
+      })
+      return { blob: new Blob([encodeWav(channels, sampleRate)], { type: 'audio/wav' }), peak }
+    } finally {
+      channelsToDispose.forEach((channel) => channel.dispose())
+      master.disconnect()
+    }
   }
 }
 

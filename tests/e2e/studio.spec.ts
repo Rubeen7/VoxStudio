@@ -240,13 +240,11 @@ test('clipped export is rejected; lowering master produces a valid mix', async (
   await page.goto('/')
   await expect(page.getByRole('button', { name: 'Importar audio', exact: true })).toBeEnabled()
   const pcm = new Float32Array(4800).fill(0.9)
-  await page
-    .getByLabel('Seleccionar archivos de audio')
-    .setInputFiles({
-      name: 'loud.wav',
-      mimeType: 'audio/wav',
-      buffer: Buffer.from(encodeWav([pcm, pcm], 48000)),
-    })
+  await page.getByLabel('Seleccionar archivos de audio').setInputFiles({
+    name: 'loud.wav',
+    mimeType: 'audio/wav',
+    buffer: Buffer.from(encodeWav([pcm, pcm], 48000)),
+  })
   await expect(page.getByRole('button', { name: /Clip loud/ })).toBeVisible()
   await page.getByRole('slider', { name: 'Ganancia de pista', exact: true }).fill('1.5')
   await page.getByRole('slider', { name: 'Volumen master', exact: true }).fill('1')
@@ -257,4 +255,46 @@ test('clipped export is rejected; lowering master produces a valid mix', async (
   await page.getByRole('button', { name: 'Exportar WAV', exact: true }).click()
   const bytes = await readFile((await (await downloadPromise).path())!)
   expect(bytes.readInt16LE(44) / 32767).toBeCloseTo(0.675, 3)
+})
+
+test('compact workspace keeps panel controls, recording destination and mixer values in sync', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 })
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: 'Grabar', exact: true })).toBeEnabled()
+  await page.getByLabel('Seleccionar archivos de audio').setInputFiles(beatFile())
+  await expect(page.getByRole('button', { name: /Clip beat-test/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Seleccionar voz', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Grabar', exact: true })).toBeEnabled()
+  await expect(page.getByText('Destino de grabación: Voz principal')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Mezclador: seleccionar Dobles', exact: true }).click()
+  await page.getByRole('slider', { name: 'Mezclador: panorama Dobles', exact: true }).fill('0.35')
+  await expect(page.getByRole('slider', { name: 'Panorama de pista', exact: true })).toHaveValue(
+    '0.35',
+  )
+  const fader = page.getByRole('slider', { name: 'Mezclador: volumen Dobles', exact: true })
+  await fader.focus()
+  await page.keyboard.press('ArrowUp')
+  await expect(fader).toHaveValue('0.81')
+  await expect(page.getByRole('slider', { name: 'Ganancia de pista', exact: true })).toHaveValue(
+    '0.81',
+  )
+  await expect(
+    page.getByRole('button', { name: 'Preparar grabación en Dobles', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true')
+
+  const before = (await page.getByTestId('timeline').boundingBox())!
+  await page.getByRole('button', { name: 'Ocultar inspector', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Alternar inspector', exact: true })).toBeFocused()
+  expect((await page.getByTestId('timeline').boundingBox())!.width).toBeGreaterThan(before.width)
+  await page.getByRole('button', { name: 'Ocultar mezclador', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Alternar mezclador', exact: true })).toBeFocused()
+  expect((await page.getByTestId('timeline').boundingBox())!.height).toBeGreaterThan(before.height)
+  await page.getByRole('button', { name: 'Alternar inspector', exact: true }).click()
+  await page.getByRole('button', { name: 'Alternar mezclador', exact: true }).click()
+  await expect(fader).toHaveValue('0.81')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1366)
+  await page.screenshot({ path: 'test-results/studio-laptop.png', fullPage: true })
 })

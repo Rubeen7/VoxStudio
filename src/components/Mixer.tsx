@@ -24,7 +24,7 @@ export function LevelMeter({ value, label }: { value: number; label: string }) {
 
 export function Mixer({ studio, onClose }: { studio: Studio; onClose: () => void }) {
   return (
-    <section className="mixer" aria-label="Mezclador">
+    <section className="mixer" id="studio-mixer" aria-label="Mezclador">
       <div className="mixer-title">
         <span>
           <SlidersHorizontal size={13} /> Mezclador
@@ -49,7 +49,6 @@ export function Mixer({ studio, onClose }: { studio: Studio; onClose: () => void
                 title={track.name}
                 onClick={() => studio.selectTrack(track.id)}
               >
-                <i />
                 <strong>{track.name}</strong>
                 <small>{String(index + 1).padStart(2, '0')}</small>
               </button>
@@ -71,9 +70,8 @@ export function Mixer({ studio, onClose }: { studio: Studio; onClose: () => void
               </div>
               <div className="channel-level">
                 <div className="fader-scale" aria-hidden="true">
-                  <span>+3</span>
+                  <span>+3.5</span>
                   <span>0</span>
-                  <span>−12</span>
                   <span>−∞</span>
                 </div>
                 <div className="mixer-fader">

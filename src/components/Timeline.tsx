@@ -6,11 +6,12 @@ import {
   dbLabel,
   formatTime,
   MAX_SECONDS,
-  projectDuration,
+  projectPlaybackDuration,
   type Clip,
   type Track,
 } from '../model/project'
 import { Waveform } from './Waveform'
+import { MAX_EFFECT_TAIL } from '../model/effects'
 
 function AudioClip({
   clip,
@@ -116,8 +117,12 @@ export function Timeline({
 }) {
   const scroll = useRef<HTMLDivElement>(null)
   const duration = Math.min(
-    MAX_SECONDS,
-    Math.max(60, projectDuration(studio.project) + 15, Math.ceil(studio.position / 30) * 30 + 30),
+    MAX_SECONDS + MAX_EFFECT_TAIL,
+    Math.max(
+      60,
+      projectPlaybackDuration(studio.project) + 15,
+      Math.ceil(studio.position / 30) * 30 + 30,
+    ),
   )
   const width = duration * scale
   const barSeconds = 240 / studio.project.bpm
@@ -176,7 +181,7 @@ export function Timeline({
               role="slider"
               aria-valuenow={Math.round(studio.position)}
               aria-valuemin={0}
-              aria-valuemax={MAX_SECONDS}
+              aria-valuemax={MAX_SECONDS + MAX_EFFECT_TAIL}
               tabIndex={0}
               onKeyDown={(e) => {
                 if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {

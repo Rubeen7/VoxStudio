@@ -7,6 +7,7 @@ import {
   MAX_DECODED_BYTES,
   MAX_SECONDS,
   projectDuration,
+  projectPlaybackDuration,
   type AudioAsset,
   type Clip,
   type Project,
@@ -14,6 +15,7 @@ import {
   type TrackKind,
 } from '../model/project'
 import * as storage from '../storage/projects'
+import { normalizeEffects, type AudioEffect } from '../model/effects'
 
 function errorMessage(error: unknown) {
   if (error instanceof DOMException) {
@@ -241,9 +243,9 @@ export function useStudio() {
             ? previous
             : nextLevels,
         )
-        if (engine.state === 'playing' && now >= projectDuration(projectRef.current)) {
+        if (engine.state === 'playing' && now >= projectPlaybackDuration(projectRef.current)) {
           engine.pause()
-          engine.seek(projectDuration(projectRef.current), projectRef.current)
+          engine.seek(projectPlaybackDuration(projectRef.current), projectRef.current)
           setTransport('paused')
         }
         if (
@@ -278,7 +280,7 @@ export function useStudio() {
     try {
       await engine.play(
         projectRef.current,
-        engine.position >= projectDuration(projectRef.current) ? 0 : engine.position,
+        engine.position >= projectPlaybackDuration(projectRef.current) ? 0 : engine.position,
       )
       setTransport('playing')
     } catch (error) {
@@ -357,6 +359,28 @@ export function useStudio() {
       })
     },
     [commit],
+  )
+
+  const updateEffects = useCallback(
+    (trackId: string, effects: AudioEffect[]) => {
+      if (busyRef.current) return
+      const previous = projectRef.current
+      const next = {
+        ...previous,
+        tracks: previous.tracks.map((track) =>
+          track.id === trackId ? { ...track, effects: normalizeEffects(effects) } : track,
+        ),
+      }
+      try {
+        // Validate/update the live graph before persisting this edit.
+        engine.updateMix(next)
+        commit(next)
+      } catch (error) {
+        engine.updateMix(previous)
+        notify(`No se pudo aplicar el efecto: ${errorMessage(error)}`, true)
+      }
+    },
+    [commit, notify],
   )
 
   const addTrack = useCallback(
@@ -641,6 +665,7 @@ export function useStudio() {
     seek,
     updateProject,
     updateTrack,
+    updateEffects,
     updateClip,
     addTrack,
     removeClip,

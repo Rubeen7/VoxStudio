@@ -31,14 +31,18 @@ import {
   formatTime,
   MAX_SECONDS,
   projectDuration,
+  projectPlaybackDuration,
   trackKinds,
   type TrackKind,
 } from './model/project'
 import './App.css'
+import { MAX_EFFECT_TAIL } from './model/effects'
 
 export default function App() {
   const studio = useStudio()
   const fileInput = useRef<HTMLInputElement>(null)
+  const mixerToggle = useRef<HTMLButtonElement>(null)
+  const inspectorToggle = useRef<HTMLButtonElement>(null)
   const [scale, setScale] = useState(42)
   const [snap, setSnap] = useState(false)
   const [mixer, setMixer] = useState(true)
@@ -49,7 +53,7 @@ export default function App() {
   const [trackKind, setTrackKind] = useState<TrackKind>('lead')
   const importClick = () => fileInput.current?.click()
   const recording = studio.transport === 'recording'
-  const duration = projectDuration(studio.project)
+  const duration = projectPlaybackDuration(studio.project)
   const clips = studio.project.tracks.reduce((sum, t) => sum + t.clips.length, 0)
   const recordingTrack = studio.project.tracks.find((track) => track.id === studio.recordingTrackId)
   const firstVoice = studio.project.tracks.find((track) => track.kind !== 'beat')
@@ -149,6 +153,8 @@ export default function App() {
           <span className="header-divider" />
           <button
             className="button export-button"
+            aria-label="Exportar WAV"
+            title="Exportar mezcla WAV · 48 kHz · 16 bits"
             onClick={() => void studio.exportMix()}
             disabled={studio.locked || !duration}
           >
@@ -336,6 +342,9 @@ export default function App() {
               <button
                 className={`icon-button small ${mixer ? 'toggled' : ''}`}
                 aria-label="Alternar mezclador"
+                ref={mixerToggle}
+                aria-controls="studio-mixer"
+                aria-expanded={mixer}
                 title="Mostrar u ocultar mezclador"
                 aria-pressed={mixer}
                 onClick={() => setMixer(!mixer)}
@@ -345,6 +354,9 @@ export default function App() {
               <button
                 className={`icon-button small ${inspector ? 'toggled' : ''}`}
                 aria-label="Alternar inspector"
+                ref={inspectorToggle}
+                aria-controls="track-inspector"
+                aria-expanded={inspector}
                 title="Mostrar u ocultar inspector"
                 aria-pressed={inspector}
                 onClick={() => setInspector(!inspector)}
@@ -384,7 +396,7 @@ export default function App() {
                 aria-label="Ir a segundo"
                 type="number"
                 min="0"
-                max={MAX_SECONDS}
+                max={MAX_SECONDS + MAX_EFFECT_TAIL}
                 step="0.1"
                 value={Number(studio.position.toFixed(1))}
                 disabled={studio.locked}
@@ -393,9 +405,25 @@ export default function App() {
               s
             </label>
           </div>
-          {mixer && <Mixer studio={studio} onClose={() => setMixer(false)} />}
+          {mixer && (
+            <Mixer
+              studio={studio}
+              onClose={() => {
+                setMixer(false)
+                mixerToggle.current?.focus()
+              }}
+            />
+          )}
         </div>
-        {inspector && <Inspector studio={studio} onClose={() => setInspector(false)} />}
+        {inspector && (
+          <Inspector
+            studio={studio}
+            onClose={() => {
+              setInspector(false)
+              inspectorToggle.current?.focus()
+            }}
+          />
+        )}
       </div>
       <footer className="status-bar">
         <span className={studio.saveStatus === 'error' ? 'red-text' : ''}>
@@ -544,7 +572,8 @@ export default function App() {
             </div>
             <p className="microcopy">
               La rejilla es visual: cambiar BPM no estira el audio ni detecta su tempo. Captura mono
-              a 48 kHz, sin monitorización de voz ni efectos. El hardware añade latencia: puedes
+              a 48 kHz, sin monitorización directa de voz. Los efectos se aplican al reproducir y
+              exportar; la toma original se conserva seca. El hardware añade latencia: puedes
               corregirla moviendo la toma. Límite: 15 minutos, 100 MB por archivo y 256 MB de audio
               decodificado. No cierres la pestaña durante la captura.
             </p>

@@ -1,18 +1,24 @@
 import { openDB, type DBSchema } from 'idb'
 import type { AudioAsset, Project } from '../model/project'
+import { migrateProject } from '../model/project'
+import { cloneEffectChain, type EffectPreset } from '../model/effects'
 
 interface VoxDatabase extends DBSchema {
   projects: { key: string; value: Project }
   assets: { key: string; value: AudioAsset; indexes: { projectId: string } }
   settings: { key: string; value: string }
+  presets: { key: string; value: EffectPreset }
 }
 
 const database = () =>
-  openDB<VoxDatabase>('vox-studio', 1, {
-    upgrade(db) {
-      db.createObjectStore('projects', { keyPath: 'id' })
-      db.createObjectStore('assets', { keyPath: 'id' }).createIndex('projectId', 'projectId')
-      db.createObjectStore('settings')
+  openDB<VoxDatabase>('vox-studio', 2, {
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1) {
+        db.createObjectStore('projects', { keyPath: 'id' })
+        db.createObjectStore('assets', { keyPath: 'id' }).createIndex('projectId', 'projectId')
+        db.createObjectStore('settings')
+      }
+      if (oldVersion < 2) db.createObjectStore('presets', { keyPath: 'id' })
     },
   })
 
@@ -51,7 +57,9 @@ export async function saveProject(project: Project, assets: AudioAsset[]) {
 export async function listProjects() {
   const db = await database()
   try {
-    return (await db.getAll('projects')).sort((a, b) => b.updatedAt - a.updatedAt)
+    return (await db.getAll('projects'))
+      .map(migrateProject)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
   } finally {
     db.close()
   }
@@ -62,14 +70,52 @@ export async function loadProject(id?: string) {
   try {
     const key = id ?? (await db.get('settings', 'last-project'))
     if (!key) return null
-    const project = await db.get('projects', key)
-    if (!project) return null
-    if (project.version !== 1) throw new Error('La versión de este proyecto no es compatible.')
+    const stored = await db.get('projects', key)
+    if (!stored) return null
+    const project = migrateProject(stored)
     const assets = await db.getAllFromIndex('assets', 'projectId', key)
     const required = new Set(project.tracks.flatMap((t) => t.clips.map((c) => c.assetId)))
     if ([...required].some((id) => !assets.some((a) => a.id === id)))
       throw new Error('El proyecto tiene archivos de audio ausentes.')
     return { project, assets }
+  } finally {
+    db.close()
+  }
+}
+
+export async function listEffectPresets() {
+  const db = await database()
+  try {
+    return (await db.getAll('presets'))
+      .filter((p) => p.version === 1)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  } finally {
+    db.close()
+  }
+}
+
+export async function saveEffectPreset(name: string, effects: EffectPreset['effects']) {
+  if (!name.trim()) throw new Error('Escribe un nombre para el preset.')
+  const preset: EffectPreset = {
+    id: crypto.randomUUID(),
+    version: 1,
+    name: name.trim().slice(0, 60),
+    updatedAt: Date.now(),
+    effects: cloneEffectChain(effects),
+  }
+  const db = await database()
+  try {
+    await db.put('presets', preset)
+    return preset
+  } finally {
+    db.close()
+  }
+}
+
+export async function deleteEffectPreset(id: string) {
+  const db = await database()
+  try {
+    await db.delete('presets', id)
   } finally {
     db.close()
   }
