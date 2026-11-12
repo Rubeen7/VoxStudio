@@ -155,13 +155,11 @@ test('live chain changes release pending reverb nodes and keep the source clock 
     { length: 48000 * 15 },
     (_, i) => 0.1 * Math.sin((2 * Math.PI * 1000 * i) / 48000),
   )
-  await page
-    .getByLabel('Seleccionar archivos de audio')
-    .setInputFiles({
-      name: 'live.wav',
-      mimeType: 'audio/wav',
-      buffer: Buffer.from(encodeWav([pcm], 48000)),
-    })
+  await page.getByLabel('Seleccionar archivos de audio').setInputFiles({
+    name: 'live.wav',
+    mimeType: 'audio/wav',
+    buffer: Buffer.from(encodeWav([pcm], 48000)),
+  })
   await page.getByRole('button', { name: 'Reproducir', exact: true }).click()
   const position = page.getByLabel('Posición de reproducción')
   await expect(position).not.toHaveText('00:00.00')

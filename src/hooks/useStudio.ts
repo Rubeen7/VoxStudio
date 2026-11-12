@@ -16,11 +16,16 @@ import {
 } from '../model/project'
 import * as storage from '../storage/projects'
 import { normalizeEffects, type AudioEffect } from '../model/effects'
+import type { LatencyMode } from '../audio/MicrophoneInput'
 
 function errorMessage(error: unknown) {
   if (error instanceof DOMException) {
+    if (error.name === 'AbortError')
+      return 'La solicitud de micrófono se ha cancelado o interrumpido. Puedes volver a intentarlo.'
     if (error.name === 'NotAllowedError')
-      return 'No se ha permitido acceder al micrófono. Activa el permiso en la barra de direcciones y vuelve a grabar.'
+      return 'No se ha permitido acceder al micrófono. Activa el permiso en la barra de direcciones y vuelve a intentarlo.'
+    if (error.name === 'OverconstrainedError')
+      return 'La entrada seleccionada ya no está disponible. Elige otro micrófono o la entrada del sistema.'
     if (error.name === 'NotFoundError')
       return 'No se ha encontrado un micrófono. Conecta uno y vuelve a intentarlo.'
     if (error.name === 'NotReadableError')
@@ -54,6 +59,11 @@ export function useStudio() {
   const recordMeta = useRef<{ trackId: string; position: number; maxDuration: number } | null>(null)
   const finishRef = useRef<() => Promise<void>>(async () => {})
   const [library, setLibrary] = useState<Project[] | null>(null)
+  const [input, setInput] = useState(() => engine.inputStatus)
+  const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([])
+  const [monitorRequest, setMonitorRequest] = useState<string | null>(null)
+  const headphonesAcknowledged = useRef(false)
+  const inputSelectionSupported = !!navigator.mediaDevices?.getSupportedConstraints().deviceId
 
   const notify = useCallback((text: string, error = false) => setNotice({ text, error }), [])
   const setOperation = useCallback((value: string | null) => {
@@ -90,6 +100,8 @@ export function useStudio() {
   }, [notify])
 
   const install = useCallback(async (saved: Awaited<ReturnType<typeof storage.loadProject>>) => {
+    engine.releaseInput()
+    setMonitorRequest(null)
     const next = saved?.project ?? createProject()
     const buffers = new Map<string, AudioBuffer>()
     let bytes = 0
@@ -114,6 +126,59 @@ export function useStudio() {
     setTransport('stopped')
     setPosition(0)
   }, [])
+
+  const refreshInputs = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      setInputDevices(devices.filter((device) => device.kind === 'audioinput' && device.deviceId))
+    } catch (error) {
+      notify(`No se pudieron consultar las entradas: ${errorMessage(error)}`, true)
+    }
+  }, [notify])
+
+  const toggleMonitoring = useCallback(
+    async (trackId: string, acknowledged = false) => {
+      if (busyRef.current) return
+      const isOff = engine.inputStatus.monitorTrackId === trackId
+      if (recordMeta.current && recordMeta.current.trackId !== trackId) return
+      if (!isOff && !headphonesAcknowledged.current && !acknowledged) {
+        setMonitorRequest(trackId)
+        return
+      }
+      if (acknowledged) headphonesAcknowledged.current = true
+      setMonitorRequest(null)
+      setOperation(isOff ? 'Desactivando escucha…' : 'Preparando monitorización…')
+      try {
+        await engine.setMonitoring(projectRef.current, isOff ? null : trackId)
+        if (!isOff && engine.inputStatus.monitorTrackId === trackId) {
+          setSelectedTrackId(trackId)
+          setSelectedClipId(null)
+        }
+        void refreshInputs()
+      } catch (error) {
+        notify(errorMessage(error), true)
+      } finally {
+        setOperation(null)
+      }
+    },
+    [notify, refreshInputs, setOperation],
+  )
+
+  const configureInput = useCallback(
+    async (deviceId: string, latencyMode: LatencyMode) => {
+      if (busyRef.current || recordMeta.current) return
+      setOperation('Configurando audio…')
+      try {
+        await engine.configureInput(deviceId, latencyMode)
+      } catch (error) {
+        notify(errorMessage(error), true)
+      } finally {
+        setOperation(null)
+      }
+    },
+    [notify, setOperation],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -217,11 +282,49 @@ export function useStudio() {
   }, [finishRecording])
 
   useEffect(() => {
+    const syncInput = () => {
+      const next = engine.inputStatus
+      setInput((previous) =>
+        Object.keys(next).every(
+          (key) => next[key as keyof typeof next] === previous[key as keyof typeof next],
+        )
+          ? previous
+          : next,
+      )
+    }
+    engine.onInputChanged = syncInput
+    engine.onInputInterrupted = () => {
+      if (recordMeta.current) {
+        notify(
+          'El micrófono se ha interrumpido. Se está recuperando la toma; la escucha queda desactivada.',
+          true,
+        )
+        void finishRef.current()
+      } else {
+        engine.pause()
+        setTransport('paused')
+        notify(
+          'Entrada interrumpida. La monitorización está desactivada; vuelve a activarla cuando esté disponible.',
+          true,
+        )
+      }
+    }
+    const pagehide = () => {
+      engine.releaseInput()
+      if (recordMeta.current) void finishRef.current()
+      else engine.stop()
+    }
+    window.addEventListener('pagehide', pagehide)
+    navigator.mediaDevices?.addEventListener('devicechange', refreshInputs)
+    // Device enumeration synchronizes external hardware, with state updated after the async query.
+    // oxlint-disable-next-line react/set-state-in-effect
+    void refreshInputs()
     engine.onCaptureEnded = () => {
       if (recordMeta.current) void finishRef.current()
     }
     engine.onInterrupted = () => {
       if (recordMeta.current) {
+        engine.releaseInput()
         notify('La entrada de audio se ha interrumpido. Se está recuperando la toma.', true)
         void finishRef.current()
       } else {
@@ -232,6 +335,7 @@ export function useStudio() {
     }
     let frame = 0
     let previous = 0
+    let lastInputUpdate = 0
     const tick = (time: number) => {
       if (time - previous > 32) {
         previous = time
@@ -243,6 +347,10 @@ export function useStudio() {
             ? previous
             : nextLevels,
         )
+        if (time - lastInputUpdate > 500) {
+          lastInputUpdate = time
+          syncInput()
+        }
         if (engine.state === 'playing' && now >= projectPlaybackDuration(projectRef.current)) {
           engine.pause()
           engine.seek(projectPlaybackDuration(projectRef.current), projectRef.current)
@@ -261,8 +369,13 @@ export function useStudio() {
       cancelAnimationFrame(frame)
       engine.onInterrupted = undefined
       engine.onCaptureEnded = undefined
+      engine.onInputChanged = undefined
+      engine.onInputInterrupted = undefined
+      window.removeEventListener('pagehide', pagehide)
+      navigator.mediaDevices?.removeEventListener('devicechange', refreshInputs)
+      engine.releaseInput()
     }
-  }, [notify])
+  }, [notify, refreshInputs])
 
   const playPause = useCallback(async () => {
     if (busyRef.current || recordMeta.current) return
@@ -323,7 +436,8 @@ export function useStudio() {
     }
     setOperation('Esperando al micrófono…')
     try {
-      await engine.startRecording(current, position, maxDuration)
+      await engine.startRecording(current, position, maxDuration, track.id)
+      void refreshInputs()
       recordMeta.current = { trackId: track.id, position, maxDuration }
       setRecordingTrackId(track.id)
       setRecordingStart(position)
@@ -334,7 +448,7 @@ export function useStudio() {
     } finally {
       setOperation(null)
     }
-  }, [finishRecording, notify, selectedTrackId, setOperation])
+  }, [finishRecording, notify, refreshInputs, selectedTrackId, setOperation])
 
   const seek = useCallback((seconds: number) => {
     if (busyRef.current || recordMeta.current || !Number.isFinite(seconds)) return
@@ -648,6 +762,16 @@ export function useStudio() {
     recordingTrackId,
     recordingStart,
     library,
+    input,
+    inputDevices,
+    inputSelectionSupported,
+    monitorRequest,
+    cancelInputRequest: () => engine.releaseInput(),
+    cancelMonitoring: () => setMonitorRequest(null),
+    toggleMonitoring,
+    configureInput,
+    refreshInputs,
+    setMonitorVolume: (value: number) => engine.setMonitorVolume(value),
     locked: !!busy || transport === 'recording',
     selectTrack: (id: string) => {
       setSelectedTrackId(id)

@@ -2,8 +2,8 @@ import { Mic, Music2, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import type { Studio } from '../hooks/useStudio'
 import { audioEngine } from '../audio/AudioEngine'
 import { dbLabel, formatTime, MAX_SECONDS, trackKinds } from '../model/project'
-import { LevelMeter } from './Mixer'
 import { EffectsPanel } from './EffectsPanel'
+import { InputControls } from './InputControls'
 
 export function Inspector({ studio, onClose }: { studio: Studio; onClose: () => void }) {
   const track = studio.selectedTrack
@@ -99,35 +99,8 @@ export function Inspector({ studio, onClose }: { studio: Studio; onClose: () => 
             </div>
           </div>
         </section>
+        <InputControls studio={studio} />
         <EffectsPanel key={track.id} studio={studio} />
-        <section className="inspector-section" aria-label="Entrada y salida">
-          <h3>Entrada y salida</h3>
-          <dl className="routing-details">
-            <div>
-              <dt>Entrada</dt>
-              <dd>{track.kind === 'beat' ? 'Archivo de audio' : 'Micrófono del sistema'}</dd>
-            </div>
-            <div>
-              <dt>Salida</dt>
-              <dd>Master · estéreo</dd>
-            </div>
-          </dl>
-          {track.kind !== 'beat' && (
-            <>
-              <div className="section-label input-status">
-                <span>Nivel de entrada</span>
-                <output className={studio.transport === 'recording' ? 'red-text' : ''}>
-                  {studio.transport === 'recording' ? 'Activo' : 'En espera'}
-                </output>
-              </div>
-              <LevelMeter value={studio.levels.input} label="Nivel del micrófono" />
-              <p className="microcopy">
-                El micrófono se activa al grabar. Usa auriculares; la voz no se monitoriza en
-                directo.
-              </p>
-            </>
-          )}
-        </section>
         <section className="inspector-section" aria-label="Edición de clip">
           <h3>Clip seleccionado</h3>
           {clip && buffer ? (

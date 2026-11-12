@@ -27,7 +27,7 @@ La previsualización usa otro puerto y, por tanto, otra biblioteca local. El con
 - Interfaz oscura adaptativa, timeline horizontal con compases y segundos, zoom, cursor y seguimiento de reproducción. Inspector y mezclador; diseño centrado en ordenador.
 - Importación con selector o arrastrar y soltar: **WAV y MP3**, además de OGG, M4A, AAC, FLAC y WebM cuando el navegador pueda decodificarlos. Se conserva el archivo original. Solo mono o estéreo.
 - Reproducción, pausa, parada, vuelta al inicio y búsqueda desde la regla, la pista vacía o el campo «Ir a». Las pistas se programan sobre un único `AudioContext`.
-- Grabación **mono PCM a 48 kHz** desde el micrófono predeterminado del sistema, con permiso explícito del navegador. El beat y las voces existentes se reproducen durante la captura. No hay monitorización directa de la voz para evitar realimentación.
+- Grabación **mono PCM a 48 kHz** desde el micrófono seleccionado, con permiso explícito del navegador. El beat y las voces existentes se reproducen durante la captura. Monitorización opcional con efectos, independiente de la grabación y desactivada por defecto.
 - Pistas iniciales de instrumental, voz principal, dobles, coros y ad-libs. Se pueden añadir más pistas de cualquiera de estos tipos y renombrarlas.
 - Formas de onda calculadas a partir de las muestras reales. Durante la captura se muestra la región en curso y el medidor de entrada; la onda completa aparece al finalizar.
 - Volumen por pista, mute, solo, panorama y volumen master. Medidores reales de micrófono y master. Los clips superpuestos se suman.
@@ -41,7 +41,7 @@ La previsualización usa otro puerto y, por tanto, otra biblioteca local. El con
 ## Flujo recomendado
 
 1. Importa el beat. El primer archivo se coloca en la pista Instrumental si está vacía; en caso contrario se usa la pista seleccionada. En una importación múltiple, los archivos adicionales crean pistas de instrumental. La importación usa la posición del cursor.
-2. Ponte auriculares y selecciona **Voz principal**. Pulsa **Grabar** y acepta el permiso. Puedes cambiar el micrófono predeterminado desde el sistema o la configuración del navegador.
+2. Ponte auriculares y selecciona **Voz principal**. El botón de auriculares activa la escucha con efectos, incluso sin grabar. Pulsa **Grabar** para capturar la voz seca. En el inspector, «Dispositivo y latencia» permite elegir entrada y preferencia de latencia con el transporte detenido y la escucha apagada.
 3. Pulsa **Finalizar** para conservar la toma y el cursor, o **Detener** para conservarla y volver al inicio. Selecciona Dobles, Coros o Ad-libs para grabar nuevas capas.
 4. Selecciona un clip y ajusta inicio, duración y recorte. Usa el mezclador y el inspector para equilibrar niveles. M silencia, S aísla; mute prevalece sobre solo.
 5. Espera a «Todos los cambios guardados». Abre **Proyectos** para crear o recuperar sesiones. **Exportar WAV** descarga la mezcla.
@@ -71,7 +71,7 @@ El proyecto usa el esquema 2. Al abrir un proyecto de esquema 1, sus pistas reci
 
 ## Efectos de pista
 
-El inspector permite añadir, eliminar, activar/desactivar y subir/bajar cada efecto. La cadena se procesa de arriba abajo. Los cambios se oyen durante reproducción y durante la reproducción de pistas existentes al grabar. **El micrófono se captura seco y no se monitoriza en directo**; al finalizar la toma, sus efectos se oyen al reproducir y se incluyen al exportar.
+El inspector permite añadir, eliminar, activar/desactivar y subir/bajar cada efecto. La cadena se procesa de arriba abajo. Los cambios se oyen durante reproducción y en la monitorización del micrófono si está activada. **El micrófono se captura seco**; sus efectos se oyen en directo, al reproducir y al exportar, sin modificar el archivo original.
 
 | Efecto                  | Procesamiento y controles                                                                                                                                                                                                             |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -100,6 +100,31 @@ Las implementaciones siguen el modelo de nodos, parámetros y AudioWorklet de la
 5. Guarda un preset, cárgalo en otra pista, modifica la copia y recarga la página. Comprueba independencia y persistencia.
 6. Exporta WAV y escúchalo fuera del navegador. Compara efectos, panorama, volumen, mute/solo y colas. Si se rechaza por saturación, baja el master y repite.
 7. Prueba en tu interfaz de audio con auriculares y en un proyecto representativo: las pruebas automáticas usan tonos y un micrófono virtual, no evalúan el carácter musical ni la latencia de tu hardware.
+
+## Monitorización en tiempo real
+
+- Activa el botón de auriculares de una pista vocal. El primer uso de cada apertura muestra el aviso de auriculares y acoples antes de solicitar el micrófono. El navegador no permite detectar de forma fiable si hay auriculares o altavoces; el aviso no pretende identificar el dispositivo de salida.
+- Solo una pista monitoriza la entrada. Activar otra transfiere la escucha; seleccionar una pista por sí solo no cambia la ruta. Si grabas en otra pista con la escucha encendida, esta sigue a la pista de grabación. Durante una toma, los botones de escucha de otras pistas quedan bloqueados.
+- Finalizar, pausar o detener conserva la escucha si estaba encendida. Apagarla mientras grabas conserva la captura; finalizar la toma con la escucha apagada libera el micrófono. Cambiar de proyecto, cerrar la página, desconectar la entrada o suspenderse el contexto apaga la escucha. Una petición de permiso pendiente puede cancelarse desde la barra inferior; cualquier stream entregado después se cierra.
+- El medidor de entrada muestra la señal mono seca. El volumen de monitorización se aplica **después** de efectos, volumen/panorama de pista y mute/solo, antes del master. No cambia el nivel grabado, los clips ni el WAV exportado. Ponerlo a cero no libera el micrófono: usa el botón de escucha.
+- «Dispositivo y latencia» enumera las entradas admitidas por el navegador. Los nombres pueden estar ocultos hasta conceder permiso. Una entrada específica desaparecida produce un error; no se cambia de micrófono silenciosamente. La opción predeterminada sigue la elección del sistema.
+- La preferencia «Baja · interactiva» solicita `latencyHint: 'interactive'` y, si se admite, una latencia de entrada ideal de 10 ms. «Equilibrada» solicita `balanced` y 40 ms de entrada. Son preferencias, no garantías ni tamaños de buffer impuestos. Cambiar la preferencia recrea el contexto de audio únicamente sin reproducción ni entrada activas y conserva los buffers y proyectos. Estos ajustes de dispositivo/escucha son de la sesión de la pestaña; nunca restauran automáticamente el micrófono.
+- Se muestran `getSettings().latency`, `baseLatency` y `outputLatency` solo cuando son números comunicados por el navegador. **No se suman ni se presentan como latencia total medida.** No incluyen necesariamente todo el recorrido físico o los retardos de cada efecto. Véanse [Web Audio](https://www.w3.org/TR/webaudio/) y [Media Capture](https://www.w3.org/TR/mediacapture-streams/).
+
+La entrada compartida se administra en [MicrophoneInput](./src/audio/MicrophoneInput.ts): un único stream → conversión mono → medidor y dos destinos. El grabador recibe PCM seco y produce una salida silenciosa. La escucha usa una sola instancia de [createTrackChannel](./src/audio/graph.ts), la misma factoría DSP utilizada por reproducción y exportación, y una ganancia posterior propia. No hay una segunda implementación de efectos ni una conexión seca audible en paralelo. Las voces ya grabadas se procesan en sus canales de reproducción; el micrófono nunca entra en el render offline. El fundido final del transporte está antes del master y fuera de la ruta de escucha.
+
+Activar/desactivar la escucha y cambiar de pista utiliza fundidos breves; los cambios de parámetros conservan el suavizado existente. Cambiar el destino de escucha reinicia la memoria de sus efectos. La captura y el beat mantienen el mismo reloj y fotograma de inicio, independientemente de la escucha. **No hay compensación automática de latencia física ni detección de la monitorización directa del hardware.** Desactiva esta última si utilizas la escucha de VOX, para evitar una voz duplicada. Bluetooth, equipos saturados o muchos efectos pueden producir un retardo perceptible; usar una interfaz cableada y reducir efectos ayuda, pero no se promete latencia cero ni ausencia universal de cortes.
+
+Prueba manual con tu equipo:
+
+1. Con auriculares y monitorización directa del hardware apagada, activa la escucha sin grabar. Comprueba nivel de entrada, volumen independiente y cambios de EQ, compresión, reverb y delay.
+2. Reproduce un beat y graba dos tomas. Apaga y enciende la escucha durante una toma: el archivo debe seguir grabándose seco, sin saltos de posición. Comprueba que no aumenta el volumen al repetir tomas.
+3. Transfiere la escucha a otra pista, prueba mute/solo y finaliza/detén el transporte. La escucha debe seguir activa hasta apagar su botón.
+4. Con todo detenido y el micrófono apagado, selecciona otra entrada y compara las dos preferencias de latencia. Los valores informados pueden no variar; evalúa el retardo con tu propia voz y tu dispositivo.
+5. Guarda, recarga y cambia de proyecto: efectos y clips deben conservarse y la escucha permanecer apagada. Exporta con escucha activada y comprueba que el WAV solo contiene los clips.
+6. Deniega el permiso o desconecta el dispositivo durante una toma. Debe mostrarse el estado/error correspondiente, conservarse el audio recuperable y permitir reactivar la entrada explícitamente.
+
+Las pruebas automatizadas comprueban cambios reales de amplitud por EQ, captura seca, beat y voz simultáneos, independencia del reloj, igualdad del WAV con/sin escucha, una sola adquisición durante múltiples tomas y cambios de pista, liberación del stream, permiso tardío cancelado, suspensión y recuperación ante desconexión. La calidad perceptiva, latencia física y comportamiento de cada controlador requieren la prueba manual.
 
 ## Comprobaciones
 
@@ -130,4 +155,4 @@ Los tonos generados y el micrófono virtual se utilizan **solo en las pruebas**.
 - **Memoria:** hasta 15 minutos de sesión, 100 MB por archivo y 256 MB de audio decodificado en memoria. La captura se detiene automáticamente al alcanzar el tiempo o la memoria restante. Exportar crea buffers adicionales; en equipos limitados, trabaja con sesiones más cortas.
 - **Compatibilidad:** validado en Chrome de escritorio. Edge Chromium debería comportarse de forma equivalente; Firefox y Safari no se han verificado. Codecs adicionales, almacenamiento y captura dependen del navegador. En móvil el editor es adaptable, pero el sistema puede suspender audio al bloquear pantalla o cambiar de aplicación.
 - **Tempo y edición:** BPM solo define la rejilla 4/4; no hay detección automática, time-stretch, metrónomo, cuantización del audio, loops, undo/redo ni comping. Las tomas superpuestas suenan juntas. El recorte no incorpora fades automáticos.
-- **No incluido:** autotune, plugins externos, automatización temporal de parámetros, masterización automática, normalización y monitorización directa del micrófono.
+- **No incluido:** autotune, plugins externos, automatización temporal de parámetros, masterización automática, normalización, selección de dispositivo de salida y compensación automática de latencia física.

@@ -11,13 +11,11 @@ import { prepareEffects } from './effects'
 import { encodeWav } from './wav'
 import recorderUrl from './recorder.worklet.js?url'
 import { createTrackChannel, type TrackChannel } from './graph'
+import { MicrophoneInput, type LatencyMode } from './MicrophoneInput'
 
 export type TransportState = 'stopped' | 'playing' | 'paused' | 'recording'
 type Capture = {
-  stream: MediaStream
-  source: MediaStreamAudioSourceNode
   node: AudioWorkletNode
-  analyser: AnalyserNode
   chunks: Float32Array[]
   done: Promise<Float32Array>
   disconnect: () => void
@@ -32,12 +30,177 @@ export class AudioEngine {
   private channels = new Map<string, TrackChannel>()
   private buffers = new Map<string, AudioBuffer>()
   private capture?: Capture
+  private microphone = new MicrophoneInput()
+  private monitor?: { trackId: string; channel: TrackChannel; level: GainNode }
+  private inputDeviceId = ''
+  private latencyMode: LatencyMode = 'interactive'
+  private monitorVolume = 0.5
+  private inputGeneration = 0
+  private recordingTrackId?: string
+  private finishing?: Promise<Awaited<ReturnType<AudioEngine['completeRecording']>>>
   private workletReady = false
   private anchor = 0
   private offset = 0
   private stateValue: TransportState = 'stopped'
   onInterrupted?: () => void
   onCaptureEnded?: () => void
+  onInputChanged?: () => void
+  onInputInterrupted?: () => void
+
+  constructor() {
+    this.microphone.onChanged = () => this.onInputChanged?.()
+    this.microphone.onEnded = () => {
+      this.releaseInput()
+      this.onInputInterrupted?.()
+    }
+  }
+
+  get inputStatus() {
+    const track = this.microphone.connection?.stream.getAudioTracks()[0]
+    const settings = track?.getSettings() as (MediaTrackSettings & { latency?: number }) | undefined
+    const reported = (value?: number) =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+    return {
+      active: track?.readyState === 'live',
+      muted: track?.muted ?? false,
+      monitorTrackId: this.monitor?.trackId ?? null,
+      volume: this.monitorVolume,
+      deviceId: this.inputDeviceId,
+      deviceLabel: track?.label ?? '',
+      latencyMode: this.latencyMode,
+      inputLatency: reported(settings?.latency),
+      baseLatency: reported(this.context?.baseLatency),
+      outputLatency: reported(this.context?.outputLatency),
+      sampleRate: this.context?.sampleRate ?? null,
+    }
+  }
+
+  async configureInput(deviceId: string, latencyMode: LatencyMode) {
+    if (this.capture || this.microphone.connection || this.stateValue === 'playing')
+      throw new Error(
+        'Detén el transporte y desactiva la monitorización para cambiar la entrada o latencia.',
+      )
+    if (!['interactive', 'balanced'].includes(latencyMode)) return
+    this.releaseInput()
+    if (latencyMode !== this.latencyMode && this.context) {
+      this.clearSources()
+      const context = this.context
+      context.onstatechange = null
+      await context.close()
+      this.master?.disconnect()
+      this.tailGate?.disconnect()
+      this.analyser?.disconnect()
+      this.context = undefined
+      this.master = this.tailGate = undefined
+      this.analyser = undefined
+      this.workletReady = false
+    }
+    this.inputDeviceId = deviceId
+    this.latencyMode = latencyMode
+    this.onInputChanged?.()
+  }
+
+  setMonitorVolume(value: number) {
+    if (!Number.isFinite(value)) return
+    this.monitorVolume = Math.max(0, Math.min(1, value))
+    this.monitor?.level.gain.setTargetAtTime(
+      this.monitorVolume,
+      this.getContext().currentTime,
+      0.01,
+    )
+    this.onInputChanged?.()
+  }
+
+  private disconnectMonitor() {
+    const monitor = this.monitor
+    if (!monitor) return
+    this.microphone.connection?.mono.disconnect(monitor.channel.input)
+    monitor.level.disconnect()
+    monitor.channel.dispose()
+    this.monitor = undefined
+  }
+
+  private async fadeMonitorOut() {
+    const monitor = this.monitor
+    if (!monitor) return
+    if (this.context?.state === 'running') {
+      monitor.level.gain.setTargetAtTime(0, this.context.currentTime, 0.003)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    }
+    if (this.monitor === monitor) this.disconnectMonitor()
+  }
+
+  private connectMonitor(project: Project, trackId: string) {
+    const track = project.tracks.find((track) => track.id === trackId && track.kind !== 'beat')
+    const input = this.microphone.connection
+    if (!track || !input) throw new Error('Selecciona una pista de voz con una entrada disponible.')
+    if (this.monitor?.trackId === trackId) {
+      this.updateMix(project)
+      return
+    }
+    const context = this.getContext()
+    const level = context.createGain()
+    level.gain.value = 0
+    let channel: TrackChannel | undefined
+    try {
+      // Same track DSP factory as playback/export, instantiated once for the live input.
+      // This separate source needs its own post-FX listening level; it never feeds the recorder.
+      channel = createTrackChannel(context, track, project, level)
+      this.disconnectMonitor()
+      level.connect(this.master!)
+      input.mono.connect(channel.input)
+      this.monitor = { trackId, channel, level }
+      level.gain.setTargetAtTime(this.monitorVolume, context.currentTime, 0.01)
+      this.updateMix(project)
+      this.onInputChanged?.()
+    } catch (error) {
+      if (channel && this.monitor?.channel === channel) {
+        input.mono.disconnect(channel.input)
+        this.monitor = undefined
+      }
+      channel?.dispose()
+      level.disconnect()
+      throw error
+    }
+  }
+
+  async setMonitoring(project: Project, trackId: string | null) {
+    const generation = ++this.inputGeneration
+    if (trackId === null) {
+      await this.fadeMonitorOut()
+      if (generation !== this.inputGeneration) return
+      if (!this.capture) this.microphone.close()
+      this.onInputChanged?.()
+      return
+    }
+    if (this.capture && this.recordingTrackId !== trackId)
+      throw new Error('Durante una toma solo se puede monitorizar la pista que se está grabando.')
+    if (!project.tracks.some((track) => track.id === trackId && track.kind !== 'beat'))
+      throw new Error('Selecciona una pista de voz para monitorizar.')
+    try {
+      const context = await this.ready()
+      if (generation !== this.inputGeneration) return
+      await this.microphone.open(context, this.inputDeviceId, this.latencyMode)
+      if (generation !== this.inputGeneration) return
+      await this.ready()
+      if (generation !== this.inputGeneration) return
+      if (this.monitor && this.monitor.trackId !== trackId) await this.fadeMonitorOut()
+      if (generation !== this.inputGeneration) return
+      this.connectMonitor(project, trackId)
+    } catch (error) {
+      if (generation !== this.inputGeneration) return
+      if (!this.capture && !this.monitor) this.microphone.close()
+      throw error
+    }
+  }
+
+  /** Safety shutdown also invalidates a permission request that is still pending. */
+  releaseInput() {
+    this.inputGeneration++
+    this.disconnectMonitor()
+    this.microphone.close()
+    this.onInputChanged?.()
+  }
 
   get state() {
     return this.stateValue
@@ -68,18 +231,21 @@ export class AudioEngine {
 
   private getContext() {
     if (!this.context) {
-      this.context = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 })
+      this.context = new AudioContext({ latencyHint: this.latencyMode, sampleRate: 48000 })
       this.master = this.context.createGain()
       this.analyser = this.context.createAnalyser()
       this.tailGate = this.context.createGain()
       this.analyser.fftSize = 2048
-      this.master.connect(this.tailGate).connect(this.analyser).connect(this.context.destination)
+      // Only scheduled clips pass through the end-of-song fade; monitoring stays independent.
+      this.tailGate.connect(this.master).connect(this.analyser).connect(this.context.destination)
       this.context.onstatechange = () => {
-        if (
-          this.context?.state !== 'running' &&
-          (this.stateValue === 'playing' || this.stateValue === 'recording')
-        )
-          this.onInterrupted?.()
+        if (this.context?.state !== 'running') {
+          const hadInput = !!this.microphone.connection
+          this.releaseInput()
+          if (hadInput) this.onInputInterrupted?.()
+          else if (this.stateValue === 'playing' || this.stateValue === 'recording')
+            this.onInterrupted?.()
+        }
       }
     }
     return this.context
@@ -122,7 +288,7 @@ export class AudioEngine {
     this.tailGate!.gain.setValueAtTime(1, context.currentTime)
     if (includeTailFade) this.scheduleTailFade(project)
     for (const track of project.tracks) {
-      const channel = createTrackChannel(context, track, project, this.master!)
+      const channel = createTrackChannel(context, track, project, this.tailGate!)
       this.channels.set(track.id, channel)
       for (const clip of track.clips) {
         const buffer = this.buffers.get(clip.assetId)
@@ -185,14 +351,17 @@ export class AudioEngine {
     const now = this.context?.currentTime ?? 0
     this.master?.gain.setTargetAtTime(project.masterVolume, now, 0.01)
     for (const track of project.tracks) {
-      const channel = this.channels.get(track.id)
-      channel?.gain.gain.setTargetAtTime(
-        isAudible(track, project.tracks) ? track.volume : 0,
-        now,
-        0.01,
-      )
-      channel?.pan.pan.setTargetAtTime(track.pan, now, 0.01)
-      channel?.updateEffects(track.effects)
+      const targets = [this.channels.get(track.id)]
+      if (this.monitor?.trackId === track.id) targets.push(this.monitor.channel)
+      for (const channel of targets) {
+        channel?.gain.gain.setTargetAtTime(
+          isAudible(track, project.tracks) ? track.volume : 0,
+          now,
+          0.01,
+        )
+        channel?.pan.pan.setTargetAtTime(track.pan, now, 0.01)
+        channel?.updateEffects(track.effects)
+      }
     }
     if (this.stateValue === 'playing') this.scheduleTailFade(project)
   }
@@ -203,7 +372,9 @@ export class AudioEngine {
   }
 
   /** Capture and playback are gated by the same AudioContext frame clock. */
-  async startRecording(project: Project, position: number, maxDuration: number) {
+  async startRecording(project: Project, position: number, maxDuration: number, trackId?: string) {
+    if (this.capture || this.finishing) throw new Error('Ya hay una toma en curso.')
+    const generation = ++this.inputGeneration
     const context = await this.ready()
     if (!navigator.mediaDevices?.getUserMedia || !context.audioWorklet)
       throw new Error('La grabación necesita HTTPS o localhost y un navegador con AudioWorklet.')
@@ -211,21 +382,13 @@ export class AudioEngine {
       await context.audioWorklet.addModule(recorderUrl)
       this.workletReady = true
     }
-    let stream: MediaStream | undefined
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-        video: false,
-      })
+      if (generation !== this.inputGeneration)
+        throw new DOMException('Grabación cancelada.', 'AbortError')
+      const input = await this.microphone.open(context, this.inputDeviceId, this.latencyMode)
       await this.ready()
-      const source = context.createMediaStreamSource(stream)
-      const analyser = context.createAnalyser()
-      analyser.fftSize = 2048
+      if (generation !== this.inputGeneration)
+        throw new DOMException('Grabación cancelada.', 'AbortError')
       const node = new AudioWorkletNode(context, 'vox-pcm-recorder', {
         channelCount: 1,
         channelCountMode: 'explicit',
@@ -234,8 +397,7 @@ export class AudioEngine {
         outputChannelCount: [1],
       })
       node.onprocessorerror = () => this.onInterrupted?.()
-      source.connect(analyser)
-      source.connect(node).connect(context.destination)
+      input.mono.connect(node).connect(context.destination)
       const chunks: Float32Array[] = []
       const done = new Promise<Float32Array>((resolve) => {
         node.port.onmessage = ({ data }) => {
@@ -253,29 +415,25 @@ export class AudioEngine {
           }
         }
       })
-      const activeStream = stream
       this.capture = {
-        stream,
-        source,
         node,
-        analyser,
         chunks,
         done,
         disconnect: () => {
-          activeStream.getTracks().forEach((track) => {
-            track.onended = null
-            track.stop()
-          })
-          source.disconnect()
-          analyser.disconnect()
+          // The shared microphone may have been disconnected by an interruption already.
+          if (this.microphone.connection === input) input.mono.disconnect(node)
           node.onprocessorerror = null
           node.disconnect()
           node.port.close()
         },
       }
-      stream.getAudioTracks().forEach((track) => {
-        track.onended = () => this.onInterrupted?.()
-      })
+      this.recordingTrackId = trackId
+      if (this.monitor && trackId) {
+        if (this.monitor.trackId !== trackId) await this.fadeMonitorOut()
+        if (generation !== this.inputGeneration)
+          throw new DOMException('Grabación cancelada.', 'AbortError')
+        this.connectMonitor(project, trackId)
+      }
       const startFrame = Math.ceil((context.currentTime + 0.12) * context.sampleRate)
       node.port.postMessage({
         type: 'start',
@@ -285,14 +443,23 @@ export class AudioEngine {
       this.schedule(project, position, startFrame / context.sampleRate, false)
       this.stateValue = 'recording'
     } catch (error) {
-      stream?.getTracks().forEach((track) => track.stop())
       this.capture?.disconnect()
       this.capture = undefined
+      this.recordingTrackId = undefined
+      if (!this.monitor) this.microphone.close()
       throw error
     }
   }
 
-  async finishRecording() {
+  finishRecording() {
+    if (this.finishing) return this.finishing
+    this.finishing = this.completeRecording().finally(() => {
+      this.finishing = undefined
+    })
+    return this.finishing
+  }
+
+  private async completeRecording() {
     const capture = this.capture
     if (!capture) return null
     this.pause()
@@ -319,6 +486,9 @@ export class AudioEngine {
     clearTimeout(timeout)
     capture.disconnect()
     this.capture = undefined
+    this.recordingTrackId = undefined
+    if (!this.monitor) this.microphone.close()
+    this.onInputChanged?.()
     if (!pcm.length) return null
     const buffer = this.getContext().createBuffer(1, pcm.length, this.sampleRate)
     buffer.getChannelData(0).set(pcm)
@@ -338,7 +508,7 @@ export class AudioEngine {
       for (const sample of data) value = Math.max(value, Math.abs(sample))
       return value
     }
-    return { master: peak(this.analyser), input: peak(this.capture?.analyser) }
+    return { master: peak(this.analyser), input: peak(this.microphone.connection?.analyser) }
   }
 
   async render(project: Project): Promise<{ blob: Blob; peak: number }> {

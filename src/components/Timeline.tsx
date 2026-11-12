@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { AudioLines, Mic, Music2, Plus, Upload } from 'lucide-react'
+import { AudioLines, Headphones, Mic, Music2, Plus, Upload } from 'lucide-react'
 import type { Studio } from '../hooks/useStudio'
 import { audioEngine } from '../audio/AudioEngine'
 import {
@@ -219,12 +219,31 @@ export function Timeline({
                     <span className="track-name">
                       <strong>{track.name}</strong>
                       <small>
-                        {track.kind === 'beat' ? 'Audio importado' : 'Entrada: micrófono'}
+                        {track.kind === 'beat'
+                          ? 'Audio importado'
+                          : studio.input.monitorTrackId === track.id
+                            ? 'Escucha en directo'
+                            : 'Entrada: micrófono'}
                       </small>
                     </span>
                     {studio.recordingTrackId === track.id && <i className="record-dot pulse" />}
                   </button>
                   <div className="track-buttons">
+                    {track.kind !== 'beat' && (
+                      <button
+                        className={`mini-button ${studio.input.monitorTrackId === track.id ? 'monitor-on' : ''}`}
+                        aria-label={`Monitorizar ${track.name}`}
+                        title="Escucha con efectos · usa auriculares"
+                        aria-pressed={studio.input.monitorTrackId === track.id}
+                        disabled={
+                          !!studio.busy ||
+                          (!!studio.recordingTrackId && studio.recordingTrackId !== track.id)
+                        }
+                        onClick={() => void studio.toggleMonitoring(track.id)}
+                      >
+                        <Headphones size={13} />
+                      </button>
+                    )}
                     <button
                       className={`mini-button ${track.muted ? 'on mute' : ''}`}
                       aria-label={`Silenciar ${track.name}`}

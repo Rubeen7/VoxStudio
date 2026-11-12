@@ -6,6 +6,7 @@ import {
   Download,
   FolderOpen,
   HardDrive,
+  Headphones,
   Magnet,
   Mic,
   Minus,
@@ -429,10 +430,23 @@ export default function App() {
         <span className={studio.saveStatus === 'error' ? 'red-text' : ''}>
           {studio.saveStatus === 'saved' ? <Check size={12} /> : <HardDrive size={12} />}
           <span role="status">{studio.busy ?? statusLabels[studio.saveStatus]}</span>
+          {(studio.busy === 'Preparando monitorización…' ||
+            studio.busy === 'Esperando al micrófono…') && (
+            <button className="text-button" onClick={studio.cancelInputRequest}>
+              Cancelar micrófono
+            </button>
+          )}
         </span>
-        <span className="footer-hint">
-          <kbd>ESPACIO</kbd> reproducir / pausar <i /> <kbd>R</kbd> grabar
-        </span>
+        {studio.input.active ? (
+          <span className="red-text" aria-label="Micrófono activo">
+            <Mic size={12} /> {studio.input.muted ? 'Entrada interrumpida' : 'Micrófono activo'}
+            {studio.input.monitorTrackId ? ' · escucha activada' : ' · grabación seca'}
+          </span>
+        ) : (
+          <span className="footer-hint">
+            <kbd>ESPACIO</kbd> reproducir / pausar <i /> <kbd>R</kbd> grabar
+          </span>
+        )}
         <span>
           {formatTime(duration)} de audio <i /> WAV · 48 kHz · 16 bits
         </span>
@@ -533,6 +547,24 @@ export default function App() {
           </p>
         </Dialog>
       )}
+      {studio.monitorRequest && (
+        <Dialog title="Monitorización con auriculares" onClose={studio.cancelMonitoring}>
+          <p className="dialog-description">
+            Conecta auriculares antes de activar la escucha. Con altavoces, el micrófono puede
+            provocar acoples. El navegador no permite detectar qué estás usando.
+          </p>
+          <p className="dialog-description">
+            Si tu interfaz tiene monitorización directa, desactívala para evitar oír la voz dos
+            veces. La escucha usará los efectos de la pista; la grabación seguirá siendo seca.
+          </p>
+          <button
+            className="button primary full-width"
+            onClick={() => void studio.toggleMonitoring(studio.monitorRequest!, true)}
+          >
+            <Headphones size={15} /> Activar con auriculares
+          </button>
+        </Dialog>
+      )}
       {dialog === 'help' && (
         <Dialog title="Tu estudio, de un vistazo" onClose={() => setDialog(null)}>
           <div className="help-content">
@@ -572,10 +604,12 @@ export default function App() {
             </div>
             <p className="microcopy">
               La rejilla es visual: cambiar BPM no estira el audio ni detecta su tempo. Captura mono
-              a 48 kHz, sin monitorización directa de voz. Los efectos se aplican al reproducir y
-              exportar; la toma original se conserva seca. El hardware añade latencia: puedes
-              corregirla moviendo la toma. Límite: 15 minutos, 100 MB por archivo y 256 MB de audio
-              decodificado. No cierres la pestaña durante la captura.
+              a 48 kHz. El botón de auriculares activa la escucha con efectos, también sin grabar.
+              Solo una pista monitoriza a la vez; al grabar otra voz, la escucha sigue a esa pista.
+              Detener no apaga la escucha: usa su botón para liberar el micrófono. Los efectos se
+              aplican al reproducir y exportar; la toma original se conserva seca. El hardware añade
+              latencia: puedes corregirla moviendo la toma. Límite: 15 minutos, 100 MB por archivo y
+              256 MB de audio decodificado. No cierres la pestaña durante la captura.
             </p>
           </div>
         </Dialog>

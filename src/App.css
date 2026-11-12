@@ -552,6 +552,39 @@
   border-color: #618270;
   color: #b6dcc6;
 }
+.mini-button.monitor-on,
+.button.monitor-on {
+  background: #354b42;
+  border-color: #618270;
+  color: #b6dcc6;
+}
+.monitor-toggle {
+  margin-top: 10px;
+  font-size: 10px;
+}
+.input-options {
+  margin-top: 12px;
+  font-size: 10px;
+}
+.input-options summary {
+  color: #b6beca;
+  cursor: pointer;
+}
+.input-options .field-label {
+  margin-top: 12px;
+}
+.input-options select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  font: inherit;
+}
+.input-options .refresh-inputs {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+}
 .record-ready span {
   width: 6px;
   height: 6px;
