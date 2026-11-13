@@ -56,6 +56,7 @@ export default function App() {
   const [inspector, setInspector] = useState(true)
   const [dialog, setDialog] = useState<'add' | 'help' | 'tracks' | 'markers' | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [timelineFileDrag, setTimelineFileDrag] = useState(false)
   const dragDepth = useRef(0)
   const [trackKind, setTrackKind] = useState<TrackKind>('lead')
   const importClick = () => fileInput.current?.click()
@@ -87,12 +88,18 @@ export default function App() {
         if (--dragDepth.current <= 0) {
           dragDepth.current = 0
           setDragging(false)
+          setTimelineFileDrag(false)
         }
       }}
       onDrop={(e) => {
+        // The timeline resolves its own file drops (track + position); this is
+        // the fallback for the rest of the window.
+        const handledByTimeline = e.defaultPrevented
         e.preventDefault()
         dragDepth.current = 0
         setDragging(false)
+        setTimelineFileDrag(false)
+        if (handledByTimeline) return
         void studio.importAudio(Array.from(e.dataTransfer.files))
       }}
     >
@@ -381,6 +388,12 @@ export default function App() {
             scale={scale}
             onImport={importClick}
             onAdd={() => setDialog('add')}
+            onFileDragActive={setTimelineFileDrag}
+            onFilesHandled={() => {
+              dragDepth.current = 0
+              setDragging(false)
+              setTimelineFileDrag(false)
+            }}
           />
           <div className="session-overview">
             <span className={recording ? 'red-text' : ''}>
@@ -475,7 +488,7 @@ export default function App() {
           </button>
         </div>
       )}
-      {dragging && (
+      {dragging && !timelineFileDrag && (
         <div className="drop-overlay">
           <Upload size={40} />
           <h2>Importar audio</h2>

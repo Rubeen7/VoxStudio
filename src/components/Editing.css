@@ -84,7 +84,7 @@
 /* ─── Fade handles ─────────────────────────────────────────────────────────── */
 .fade-handle {
   position: absolute;
-  top: 20px;
+  bottom: 2px;
   width: 10px;
   height: 10px;
   border-radius: 50%;
@@ -478,3 +478,58 @@
   font-size: 10px;
 }
 
+
+/* ─── File drop import ─────────────────────────────────────────────────────── */
+.timeline-scroll.file-drop-active {
+  cursor: copy;
+}
+
+.track-row.drop-target-track .track-lane {
+  background-color: color-mix(in srgb, var(--accent) 10%, #202328);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.track-row.drop-target-track .track-controls {
+  background: color-mix(in srgb, var(--accent) 12%, #282b30);
+}
+
+.timeline-drop-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-1px);
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.timeline-drop-line::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 9px;
+  height: 7px;
+  transform: translateX(-50%);
+  background: var(--accent);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.timeline-drop-label {
+  position: absolute;
+  top: 6px;
+  z-index: 2;
+  max-width: 195px;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, #444b55);
+  border-radius: 3px;
+  background: #1b1e22f2;
+  color: #e6e3ee;
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}

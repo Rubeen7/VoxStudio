@@ -25,7 +25,7 @@ La previsualización usa otro puerto y, por tanto, otra biblioteca local. El con
 ## Qué incluye
 
 - Interfaz oscura adaptativa, timeline horizontal con compases y segundos, zoom, cursor y seguimiento de reproducción. Inspector y mezclador; diseño centrado en ordenador.
-- Importación con selector o arrastrar y soltar: **WAV y MP3**, además de OGG, M4A, AAC, FLAC y WebM cuando el navegador pueda decodificarlos. Se conserva el archivo original. Solo mono o estéreo.
+- Importación con selector o arrastrar y soltar: **WAV y MP3**, además de OGG, M4A, AAC, FLAC y WebM cuando el navegador pueda decodificarlos. Al arrastrar sobre el timeline se muestra la pista y la posición de destino; soltar sobre una pista coloca allí el clip y soltar en un espacio vacío usa la pista adecuada o crea una nueva. Se conserva el archivo original. Solo mono o estéreo.
 - Reproducción, pausa, parada, vuelta al inicio y búsqueda desde la regla, la pista vacía o el campo «Ir a». Las pistas se programan sobre un único `AudioContext`.
 - Grabación **mono PCM a 48 kHz** desde el micrófono seleccionado, con permiso explícito del navegador. El beat y las voces existentes se reproducen durante la captura. Monitorización opcional con efectos, independiente de la grabación y desactivada por defecto.
 - Pistas iniciales de instrumental, voz principal, dobles, coros y ad-libs. Se pueden añadir más pistas de cualquiera de estos tipos y renombrarlas.
@@ -145,7 +145,7 @@ npm run test:production
 Las pruebas E2E usan **Google Chrome instalado** mediante Playwright, con un micrófono virtual del navegador. Si no tienes Chrome, instala el canal con `npx playwright install chrome`, o cambia `channel` en [playwright.config.ts](./playwright.config.ts). El servidor de desarrollo arranca automáticamente si no está activo.
 
 - Pruebas unitarias: cabecera y muestras WAV, recortes y búsqueda, mute/solo, persistencia atómica con Blob y rollback, conservación de los audios originales, edición no destructiva (recorte, división de tomas, movimiento entre pistas, duplicado, fades y snap), presets de fábrica y de usuario, y límites exactos del AudioWorklet, incluidos huecos silenciosos y vaciado del último bloque.
-- E2E: importación WAV/MP3 y onda real, arrastre y recortes, transporte, captura PCM a través del AudioWorklet, recuperación tras recarga, varios proyectos y descarga WAV; permisos y archivo inválido; adaptación móvil y control de saturación. El recorrido completo también se comprueba contra la compilación de producción, incluido el archivo AudioWorklet emitido.
+- E2E: importación WAV/MP3 y onda real, arrastre de clips y recortes, importación soltando archivos sobre una pista o el espacio vacío (incluido el rechazo de archivos no compatibles y la recuperación tras recarga), transporte, captura PCM a través del AudioWorklet, varios proyectos y descarga WAV; permisos y archivo inválido; adaptación móvil y control de saturación. El recorrido completo también se comprueba contra la compilación de producción, incluido el archivo AudioWorklet emitido.
 - Verificación de mezcla en Web Audio nativo: silencio previo, comienzo exacto, offset de origen, duración, panorámica, ganancias, mute/solo y cancelación de dos señales opuestas alineadas.
 
 Los tonos generados y el micrófono virtual se utilizan **solo en las pruebas**. La aplicación inicia con una sesión vacía y solo muestra y reproduce audio importado o capturado.

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+} from 'react'
 import { Headphones, Mic, Music2, Plus, Upload } from 'lucide-react'
 import type { Studio } from '../hooks/useStudio'
 import {
@@ -9,6 +16,8 @@ import {
   playableClips,
   trackKinds,
 } from '../model/project'
+import { snapTime } from '../model/editing'
+import { timelineDropTime } from '../model/importing'
 import { AudioClip } from './AudioClip'
 import { ClipMenu } from './ClipTools'
 import './Editing.css'
@@ -20,14 +29,19 @@ export function Timeline({
   scale,
   onImport,
   onAdd,
+  onFileDragActive,
+  onFilesHandled,
 }: {
   studio: Studio
   scale: number
   onImport: () => void
   onAdd: () => void
+  onFileDragActive: (active: boolean) => void
+  onFilesHandled: () => void
 }) {
   const scroll = useRef<HTMLDivElement>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ trackId: string | null; time: number } | null>(null)
   const closeMenu = useCallback(() => setMenu(null), [])
   const duration = Math.min(
     MAX_SECONDS + MAX_EFFECT_TAIL,
@@ -46,6 +60,58 @@ export function Timeline({
     (_, i) => i * markerStep,
   )
   const hasAudio = studio.project.tracks.some((track) => track.clips.length)
+  const dropTrack = dropTarget?.trackId
+    ? studio.project.tracks.find((track) => track.id === dropTarget.trackId)
+    : undefined
+  // Only external file drags opt in: clip and track-list drags use pointer events
+  // or text/plain, so they never reach these handlers.
+  const acceptsFiles = (event: DragEvent<HTMLDivElement>) =>
+    !studio.locked && event.dataTransfer.types.includes('Files')
+  const fileDropInfo = (event: DragEvent<HTMLDivElement>) => {
+    const lane = (event.target as HTMLElement).closest<HTMLElement>('[data-track-id]')
+    // The ruler marks time zero even when the drop lands outside a lane.
+    const base = lane ?? event.currentTarget.querySelector<HTMLElement>('.ruler')
+    if (!base) return { trackId: lane?.dataset.trackId ?? null, time: studio.position }
+    const rect = base.getBoundingClientRect()
+    const time = timelineDropTime(event.clientX, rect.left, scale, duration, studio.position)
+    return {
+      trackId: lane?.dataset.trackId ?? null,
+      time: snapTime(time, studio.project, event.shiftKey),
+    }
+  }
+  const fileDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (!acceptsFiles(event)) return
+    event.preventDefault()
+    setDropTarget(fileDropInfo(event))
+    onFileDragActive(true)
+  }
+  const fileDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!acceptsFiles(event)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    const info = fileDropInfo(event)
+    setDropTarget((current) =>
+      current && current.trackId === info.trackId && current.time === info.time ? current : info,
+    )
+  }
+  const fileDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    const next = event.relatedTarget as Node | null
+    if (next && event.currentTarget.contains(next)) return
+    setDropTarget(null)
+    onFileDragActive(false)
+  }
+  const fileDrop = (event: DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes('Files') || studio.locked) return
+    event.preventDefault()
+    event.stopPropagation()
+    const info = fileDropInfo(event)
+    const files = Array.from(event.dataTransfer.files)
+    setDropTarget(null)
+    onFileDragActive(false)
+    onFilesHandled()
+    void studio.importAudio(files, { trackId: info.trackId ?? undefined, start: info.time })
+  }
   useEffect(() => {
     const element = scroll.current
     if (!element || (studio.transport !== 'playing' && studio.transport !== 'recording')) return
@@ -54,6 +120,19 @@ export function Timeline({
     if (x > element.scrollLeft + viewport - 40 || x < element.scrollLeft)
       element.scrollLeft = Math.max(0, x - 60)
   }, [scale, studio.position, studio.transport])
+  // Cancelled or finished drags (Escape, dropping elsewhere) must clear the line.
+  useEffect(() => {
+    const clearDrop = () => {
+      setDropTarget(null)
+      onFileDragActive(false)
+    }
+    window.addEventListener('dragend', clearDrop)
+    window.addEventListener('drop', clearDrop)
+    return () => {
+      window.removeEventListener('dragend', clearDrop)
+      window.removeEventListener('drop', clearDrop)
+    }
+  }, [onFileDragActive])
   return (
     <>
       {!hasAudio && studio.transport !== 'recording' && (
@@ -67,7 +146,15 @@ export function Timeline({
           </button>
         </div>
       )}
-      <div className="timeline-scroll" ref={scroll} data-testid="timeline">
+      <div
+        className={`timeline-scroll ${dropTarget ? 'file-drop-active' : ''}`}
+        ref={scroll}
+        data-testid="timeline"
+        onDragEnter={fileDragEnter}
+        onDragOver={fileDragOver}
+        onDragLeave={fileDragLeave}
+        onDrop={fileDrop}
+      >
         <div className="timeline-content" style={{ width: width + 224 }}>
           <div className="ruler-row">
             <div className="track-column ruler-label">
@@ -119,7 +206,7 @@ export function Timeline({
             {studio.project.tracks.filter(track => !track.hidden || track.id === studio.recordingTrackId).map((track) => (
               <div
                 key={track.id}
-                className={`track-row ${track.collapsed && track.id !== studio.recordingTrackId ? 'collapsed-track' : ''} ${studio.selectedTrack.id === track.id ? 'active-track' : ''} ${track.muted ? 'muted-track' : ''} ${studio.recordingTrackId === track.id ? 'recording-track' : ''}`}
+                className={`track-row ${track.collapsed && track.id !== studio.recordingTrackId ? 'collapsed-track' : ''} ${studio.selectedTrack.id === track.id ? 'active-track' : ''} ${track.muted ? 'muted-track' : ''} ${studio.recordingTrackId === track.id ? 'recording-track' : ''} ${dropTarget?.trackId === track.id ? 'drop-target-track' : ''}`}
                 style={{ '--track-color': track.color } as CSSProperties}
               >
                 <div className="track-column track-controls">
@@ -257,6 +344,30 @@ export function Timeline({
             >
               <span />
             </div>
+            {dropTarget && (
+              <>
+                <div
+                  className="timeline-drop-line"
+                  data-testid="file-drop-indicator"
+                  style={{ left: 224 + dropTarget.time * scale }}
+                  aria-hidden="true"
+                />
+                <div
+                  className="timeline-drop-label"
+                  style={{
+                    left: Math.max(
+                      232,
+                      Math.min(224 + dropTarget.time * scale + 8, 224 + width - 205),
+                    ),
+                  }}
+                  aria-hidden="true"
+                >
+                  {dropTrack
+                    ? `Suelta en «${dropTrack.name}» · ${formatTime(dropTarget.time, true)}`
+                    : `Suelta para importar · ${formatTime(dropTarget.time, true)}`}
+                </div>
+              </>
+            )}
           </div>
           <div className="timeline-empty-space" style={{ width: width + 224 }}>
             <div className="track-column add-track-cell">

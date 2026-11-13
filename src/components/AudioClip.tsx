@@ -80,7 +80,7 @@ export function AudioClip({ clip, track, studio, scale, onMenu }: { clip: Clip; 
       onKeyDown={e => { if (['ArrowLeft','ArrowRight'].includes(e.key)) { e.preventDefault(); studio.updateClip(clip.id, trimClip(clip, edge, clip.start + (edge === 'end' ? clip.duration : 0) + step(e.shiftKey) * (e.key === 'ArrowRight' ? 1 : -1), buffer?.duration ?? clip.duration)) } }} />)}
     {(['fadeIn','fadeOut'] as const).map(fade => <button key={fade} className="fade-handle" aria-label={`${fade === 'fadeIn' ? 'Fundido de entrada' : 'Fundido de salida'} de ${clip.name}`}
       title={`${fade === 'fadeIn' ? 'Fade in' : 'Fade out'}: ${(shown[fade] ?? 0).toFixed(2)} s · arrastra`}
-      style={fade === 'fadeIn' ? { left: Math.max(7, (shown.fadeIn ?? 0) * scale - 4) } : { right: Math.max(7, (shown.fadeOut ?? 0) * scale - 4) }}
+      style={fade === 'fadeIn' ? { left: Math.max(12, (shown.fadeIn ?? 0) * scale - 4) } : { right: Math.max(12, (shown.fadeOut ?? 0) * scale - 4) }}
       disabled={studio.locked} onPointerDown={e => begin(e, fade)}
       onKeyDown={e => { if (['ArrowLeft','ArrowRight'].includes(e.key)) { e.preventDefault(); studio.updateClip(clip.id, { [fade]: (clip[fade] ?? 0) + 0.01 * (e.key === 'ArrowRight' ? 1 : -1) }) } }} />)}
   </div>

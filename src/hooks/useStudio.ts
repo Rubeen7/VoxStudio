@@ -17,6 +17,7 @@ import {
 } from '../model/project'
 import * as storage from '../storage/projects'
 import { normalizeEffects, type AudioEffect } from '../model/effects'
+import { importStart, isSupportedAudioFile } from '../model/importing'
 import { ProjectHistory } from '../model/history'
 import * as editing from '../model/editing'
 import type { LatencyMode } from '../audio/MicrophoneInput'
@@ -733,20 +734,24 @@ export function useStudio() {
   }, [commit])
 
   const importAudio = useCallback(
-    async (files: File[]) => {
+    async (files: File[], target?: { trackId?: string; start?: number }) => {
       if (busyRef.current || recordMeta.current || !files.length) return
+      // Validate the whole drop before committing anything, so an accidental
+      // non-audio file never leaves a half-finished import behind.
+      const unsupported = files.find((file) => !isSupportedAudioFile(file.name))
+      if (unsupported) {
+        notify(`«${unsupported.name}» no es un archivo de audio compatible. Usa WAV o MP3.`, true)
+        return
+      }
       setOperation('Importando audio…')
       let imported = 0
+      let sequential = 0
       try {
         engine.pause()
         setTransport('paused')
         for (const file of files) {
           if (file.size > 100 * 1024 * 1024)
             throw new Error(`${file.name}: el máximo es 100 MB por archivo.`)
-          if (!/\.(wav|mp3|ogg|m4a|aac|flac|webm)$/i.test(file.name))
-            throw new Error(
-              `${file.name}: selecciona un archivo WAV, MP3, OGG, M4A, AAC, FLAC o WebM.`,
-            )
           const buffer = await engine.decode(file)
           if (buffer.duration > MAX_SECONDS || buffer.duration <= 0)
             throw new Error('Cada audio debe durar entre 0 y 15 minutos.')
@@ -767,13 +772,22 @@ export function useStudio() {
           })
           engine.setBuffer(id, buffer)
           const selected = current.tracks.find((t) => t.id === selectedTrackId)
+          // A drop on a lane keeps every file on that track, one after another.
+          const targetTrack = target?.trackId
+            ? current.tracks.find((t) => t.id === target.trackId)
+            : undefined
           const track =
-            imported === 0
+            targetTrack ??
+            (imported === 0
               ? (current.tracks.find((t) => t.kind === 'beat' && !t.clips.length) ??
                 selected ??
                 current.tracks[0])
-              : createTrack('beat')
-          const start = Math.min(engine.position, MAX_SECONDS - buffer.duration)
+              : createTrack('beat'))
+          const start = importStart(
+            target?.start ?? engine.position,
+            buffer.duration,
+            targetTrack ? sequential : 0,
+          )
           const clip: Clip = {
             id: crypto.randomUUID(),
             assetId: id,
@@ -794,6 +808,7 @@ export function useStudio() {
           setSelectedClipId(clip.id)
           setSelectedClipIds([clip.id])
           setSelectedTrackId(track.id)
+          if (targetTrack) sequential += buffer.duration
           imported++
         }
         await persist()
