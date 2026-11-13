@@ -1,0 +1,480 @@
+/* ─── Editing toolbar ──────────────────────────────────────────────────────── */
+.editing-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 36px;
+  flex-shrink: 0;
+  padding: 0 10px;
+  border-bottom: 1px solid #2e323a;
+  background: #25282d;
+  overflow-x: auto;
+}
+
+.selection-count {
+  font-size: 9px;
+  color: #7a8290;
+  margin-left: 2px;
+  white-space: nowrap;
+}
+
+/* ─── Clip context menu ────────────────────────────────────────────────────── */
+.clip-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  border: 1px solid #555c68;
+  border-radius: 4px;
+  background: #2e333b;
+  box-shadow: 0 8px 28px #0005;
+  padding: 4px;
+}
+
+.clip-menu button[role='menuitem'] {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  font-size: 11px;
+  border-radius: 2px;
+  color: #d4d8e0;
+}
+
+.clip-menu button[role='menuitem']:hover:not(:disabled) {
+  background: #3d4350;
+}
+
+.clip-menu button[role='menuitem']:disabled {
+  color: #575f6e;
+}
+
+.clip-menu hr {
+  border: none;
+  border-top: 1px solid #3a4049;
+  margin: 4px 0;
+}
+
+/* ─── Clip trim handles ────────────────────────────────────────────────────── */
+.clip-trim {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 1;
+}
+
+.trim-start {
+  left: 0;
+  border-radius: 2px 0 0 2px;
+}
+
+.trim-end {
+  right: 0;
+  border-radius: 0 2px 2px 0;
+}
+
+.clip-trim:hover,
+.clip-trim:focus-visible {
+  background: color-mix(in srgb, var(--track-color) 50%, transparent);
+  outline: none;
+}
+
+/* ─── Fade handles ─────────────────────────────────────────────────────────── */
+.fade-handle {
+  position: absolute;
+  top: 20px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--track-color) 80%, #fff);
+  border: 1px solid #fff4;
+  touch-action: none;
+  cursor: ew-resize;
+  z-index: 1;
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.audio-clip:hover .fade-handle,
+.audio-clip.selected .fade-handle {
+  opacity: 1;
+}
+
+.fade-handle:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+}
+
+/* ─── Fade shading: visible whenever a fade is set ─────────────────────────── */
+.clip-fade {
+  position: absolute;
+  top: 20px;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.clip-fade.fade-in {
+  left: 0;
+  background: linear-gradient(to right, #0a0c0fc0, transparent);
+}
+
+.clip-fade.fade-out {
+  right: 0;
+  background: linear-gradient(to left, #0a0c0fc0, transparent);
+}
+
+.audio-clip.has-fade .fade-handle {
+  opacity: 0.8;
+}
+
+/* ─── Clip envelope SVG ────────────────────────────────────────────────────── */
+.clip-envelope {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.clip-envelope polyline {
+  fill: none;
+  stroke: color-mix(in srgb, var(--track-color) 90%, #fff);
+  stroke-width: 0.012;
+  vector-effect: non-scaling-stroke;
+  stroke-width: 1px;
+}
+
+/* ─── Take badge ───────────────────────────────────────────────────────────── */
+.take-badge {
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--track-color) 40%, #1a1d22);
+  border: 1px solid color-mix(in srgb, var(--track-color) 60%, transparent);
+  color: #e2e5ea;
+  flex-shrink: 0;
+}
+
+/* ─── Clip menu: rename and gain ──────────────────────────────────────────── */
+.clip-menu-rename {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  min-width: 210px;
+}
+
+.clip-menu-rename label {
+  font-size: 10px;
+  color: #a8b0bc;
+}
+
+.clip-rename-input {
+  width: 100%;
+  height: 26px;
+  background: #191c20;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  color: #e8ebf0;
+  font-size: 11px;
+  padding: 0 6px;
+}
+
+.clip-menu-rename-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clip-menu-rename-actions .button {
+  flex: 1;
+}
+
+.clip-menu-gain {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 6px 10px 8px;
+}
+
+.clip-menu-gain label {
+  font-size: 10px;
+  color: #a8b0bc;
+}
+
+.clip-menu-gain output {
+  font: 10px var(--mono);
+  color: #d4d8e0;
+}
+
+.clip-menu-gain input {
+  grid-column: 1 / -1;
+}
+
+/* ─── Track organization list ─────────────────────────────────────────────── */
+.track-organization {
+  font-size: 11px;
+}
+
+.track-organization summary {
+  cursor: pointer;
+  color: #adb4be;
+  padding-bottom: 10px;
+}
+
+.track-organization summary:focus-visible {
+  outline: 2px solid var(--accent);
+  border-radius: 2px;
+}
+
+.track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.track-list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-left: 3px solid;
+  border-radius: 2px;
+  background: #2a2e35;
+  font-size: 10px;
+}
+
+.track-list-row .text-button {
+  flex: 1;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-list-row small {
+  font-size: 9px;
+  color: #7a8290;
+  white-space: nowrap;
+}
+
+.track-drag-handle {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: #6b7482;
+  cursor: grab;
+}
+
+.track-list-row.dragging {
+  opacity: 0.45;
+}
+
+.track-list-row.drop-target {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+  background: #333a45;
+}
+
+.track-list-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.group-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  background: #202428;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #c0c7d0;
+}
+
+/* ─── Takes panel ──────────────────────────────────────────────────────────── */
+.takes-panel .take-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.takes-panel .take-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid #3a4049;
+  border-radius: 3px;
+  background: #2a2e35;
+  font-size: 10px;
+}
+
+.takes-panel .take-row label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.takes-panel .take-row label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.takes-panel .take-row.active-take {
+  border-color: color-mix(in srgb, var(--track-color, #9b94b2) 70%, transparent);
+  background: color-mix(in srgb, var(--track-color, #9b94b2) 12%, #2a2e35);
+}
+
+.take-name-input {
+  flex: 1;
+  height: 20px;
+  background: #191c20;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  color: #e8ebf0;
+  font-size: 10px;
+  padding: 0 4px;
+  min-width: 0;
+}
+
+/* ─── Markers panel ────────────────────────────────────────────────────────── */
+.markers-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.marker-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.marker-nav .button {
+  flex: 1;
+  justify-content: center;
+}
+
+.marker-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.marker-editor input[type='text'],
+.marker-editor input:not([type='number']) {
+  flex: 1;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid #484e58;
+  border-radius: 3px;
+  background: #1b1e22;
+  color: #d9dfe7;
+  font-size: 10px;
+}
+
+.marker-editor input[type='number'] {
+  width: 60px;
+  height: 28px;
+  padding: 0 5px;
+  border: 1px solid #484e58;
+  border-radius: 3px;
+  background: #1b1e22;
+  color: #d9dfe7;
+  font: 10px var(--mono);
+  text-align: right;
+}
+
+/* ─── Timeline markers strip ───────────────────────────────────────────────── */
+.marker-row {
+  display: flex;
+  height: 22px;
+  border-bottom: 1px solid #2b2f36;
+}
+
+.marker-label {
+  display: flex;
+  align-items: center;
+  font-size: 9px;
+  color: #7a8290;
+  padding-left: 10px;
+  flex-shrink: 0;
+}
+
+.marker-lane {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.timeline-marker {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  height: 18px;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 500;
+  color: #d2cab8;
+  background: #3a3630;
+  border: 1px solid #605a4a;
+  border-radius: 2px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.timeline-marker:hover {
+  background: #4a4438;
+  color: #f0e8d0;
+}
+
+/* ─── Clip body button ─────────────────────────────────────────────────────── */
+.clip-body {
+  display: block;
+  width: 100%;
+  height: 100%;
+  text-align: left;
+  cursor: grab;
+  touch-action: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+.clip-body:active {
+  cursor: grabbing;
+}
+
+/* ─── Compact inspector actions ────────────────────────────────────────────── */
+.compact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.compact-actions .button {
+  flex: 1;
+  min-width: 80px;
+  font-size: 10px;
+}
+

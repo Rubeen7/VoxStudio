@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { GripVertical } from 'lucide-react'
 import type { Studio } from '../hooks/useStudio'
 import { trackKinds, type TrackKind } from '../model/project'
 
@@ -24,11 +26,35 @@ export function TrackOrganization({ studio }: { studio: Studio }) {
 
 export function TrackList({ studio }: { studio: Studio }) {
   const groups = [...new Set(studio.project.tracks.map(t => t.group).filter((g): g is string => !!g))]
+  const [dragging, setDragging] = useState<string | null>(null)
+  const [over, setOver] = useState<string | null>(null)
   return <div className="track-list">
-    <p className="microcopy">Los grupos organizan la vista; cada pista conserva su mezcla y efectos.</p>
+    <p className="microcopy">Arrastra una pista para cambiar su orden, o usa Alt + ↑/↓ con el foco en su nombre. Los grupos organizan la vista; cada pista conserva su mezcla y efectos.</p>
     {groups.map(group => <div className="group-row" key={group}><strong>{group}</strong><button className="button" disabled={studio.locked} onClick={() => studio.updateGroup(group, { collapsed: !studio.project.tracks.filter(t => t.group === group).every(t => t.collapsed) })}>Contraer / expandir grupo</button></div>)}
-    {studio.project.tracks.map(track => <div key={track.id} className="track-list-row" style={{ borderLeftColor: track.color }}>
-      <button className="text-button" onClick={() => studio.selectTrack(track.id)}>{track.name}</button>
+    {studio.project.tracks.map((track, index) => <div key={track.id}
+      className={`track-list-row ${dragging === track.id ? 'dragging' : ''} ${over === track.id ? 'drop-target' : ''}`}
+      style={{ borderLeftColor: track.color }}
+      draggable={!studio.locked}
+      onDragStart={(e) => { setDragging(track.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', track.id) }}
+      onDragOver={(e) => { if (!dragging || dragging === track.id) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOver(track.id) }}
+      onDragLeave={() => setOver((current) => (current === track.id ? null : current))}
+      onDrop={(e) => {
+        e.preventDefault()
+        const id = dragging ?? e.dataTransfer.getData('text/plain')
+        setOver(null)
+        setDragging(null)
+        if (id) studio.moveTrack(id, index)
+      }}
+      onDragEnd={() => { setDragging(null); setOver(null) }}
+    >
+      <span className="track-drag-handle" aria-hidden="true" title="Arrastra para reordenar"><GripVertical size={13} /></span>
+      <button className="text-button" title="Arrastra o Alt + ↑/↓ para reordenar"
+        onClick={() => studio.selectTrack(track.id)}
+        onKeyDown={(e) => {
+          if (!e.altKey) return
+          if (e.key === 'ArrowUp' && index > 0) { e.preventDefault(); studio.moveTrack(track.id, index - 1) }
+          if (e.key === 'ArrowDown' && index < studio.project.tracks.length - 1) { e.preventDefault(); studio.moveTrack(track.id, index + 1) }
+        }}>{track.name}</button>
       <small>{track.group || trackKinds[track.kind].name}</small>
       <label><input type="checkbox" aria-label={`Mostrar ${track.name}`} checked={!track.hidden} disabled={studio.locked} onChange={e => studio.updateTrack(track.id, { hidden: !e.target.checked })} /> Visible</label>
       <label><input type="checkbox" aria-label={`Contraer ${track.name}`} checked={!!track.collapsed} disabled={studio.locked} onChange={e => studio.updateTrack(track.id, { collapsed: e.target.checked })} /> Compacta</label>

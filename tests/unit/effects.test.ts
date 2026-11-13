@@ -4,15 +4,19 @@ import { describe, expect, it } from 'vitest'
 import {
   cloneEffectChain,
   createEffect,
+  effectDefinitions,
   effectTail,
+  FACTORY_PRESETS,
   MAX_EFFECTS,
   normalizeEffects,
 } from '../../src/model/effects'
 import { createProject, projectPlaybackDuration } from '../../src/model/project'
 import {
   deleteEffectPreset,
+  duplicateEffectPreset,
   listEffectPresets,
   loadProject,
+  renameEffectPreset,
   saveEffectPreset,
   saveProject,
 } from '../../src/storage/projects'
@@ -76,7 +80,7 @@ describe('effect settings and persistence', () => {
     await db.put('settings', old.id, 'last-project')
     db.close()
     const restored = (await loadProject())!.project
-    expect(restored.version).toBe(2)
+    expect(restored.version).toBe(3)
     expect(restored.tracks.map((t) => t.effects)).toEqual([[], [], [], [], []])
     expect(restored.tracks[0].id).toBe(old.tracks[0].id)
     restored.tracks[1].effects = [createEffect('compressor'), createEffect('deesser')]
@@ -96,5 +100,41 @@ describe('effect settings and persistence', () => {
     await deleteEffectPreset(saved.id)
     expect((await listEffectPresets()).some((p) => p.id === saved.id)).toBe(false)
     await expect(saveEffectPreset(' ', effects)).rejects.toThrow('nombre')
+  })
+  it('ships factory presets with valid, bounded effect chains', () => {
+    expect(FACTORY_PRESETS.length).toBeGreaterThanOrEqual(5)
+    expect(FACTORY_PRESETS.find((p) => p.id === 'beat-clean')!.effects).toEqual([])
+    for (const preset of FACTORY_PRESETS) {
+      expect(preset.factory).toBe(true)
+      expect(preset.effects.length).toBeLessThanOrEqual(MAX_EFFECTS)
+      expect(normalizeEffects(preset.effects)).toHaveLength(preset.effects.length)
+      for (const effect of preset.effects) {
+        expect(effectDefinitions[effect.type]).toBeDefined()
+        expect(Object.keys(effect.params).sort()).toEqual(
+          effectDefinitions[effect.type].parameters.map((p) => p.key).sort(),
+        )
+      }
+    }
+  })
+  it('renames and duplicates stored presets independently', async () => {
+    const original = await saveEffectPreset('Cadena base', [createEffect('compressor')])
+    const renamed = await renameEffectPreset(original.id, '  Cadena renombrada  ')
+    expect(renamed.name).toBe('Cadena renombrada')
+    expect(renamed.id).toBe(original.id)
+    const copy = await duplicateEffectPreset(renamed.id)
+    expect(copy.id).not.toBe(renamed.id)
+    expect(copy.name).toBe('Cadena renombrada · copia')
+    expect(copy.effects[0].id).not.toBe(renamed.effects[0].id)
+    const stored = (await listEffectPresets()).filter((p) => [copy.id, renamed.id].includes(p.id))
+    expect(stored.map((p) => p.name)).toEqual(
+      expect.arrayContaining(['Cadena renombrada', 'Cadena renombrada · copia']),
+    )
+    const storedOriginal = stored.find((p) => p.id === renamed.id)!
+    expect(storedOriginal.effects[0].params.ratio).toBe(4)
+    expect(copy.effects[0].params.ratio).toBe(4)
+    await expect(renameEffectPreset('missing', 'X')).rejects.toThrow('No se encuentra')
+    await expect(duplicateEffectPreset('missing')).rejects.toThrow('No se encuentra')
+    await deleteEffectPreset(copy.id)
+    await deleteEffectPreset(renamed.id)
   })
 })

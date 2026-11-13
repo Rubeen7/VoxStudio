@@ -1,4 +1,4 @@
-.effects-title {
+﻿.effects-title {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -171,4 +171,50 @@
   .effects-panel {
     grid-column: 1 / -1;
   }
+}
+
+/* Preset list improvements */
+.preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.preset-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 0;
+}
+
+.preset-load-btn {
+  flex: 1;
+  text-align: left;
+  font-size: 10px;
+  color: #c5ccda;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 2px;
+}
+
+.preset-load-btn:hover:not(:disabled) {
+  color: #e8ebf0;
+}
+
+.preset-tag {
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 2px 4px;
+  border-radius: 2px;
+  border: 1px solid #3f4855;
+  color: #7a8696;
+  flex-shrink: 0;
+}
+
+.preset-tag.factory {
+  border-color: #3d5069;
+  color: #6a90b8;
 }

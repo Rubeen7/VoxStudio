@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { audioEngine as engine, type TransportState } from '../audio/AudioEngine'
 import { downloadBlob } from '../audio/wav'
 import {
@@ -59,6 +59,15 @@ export function useStudio() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null)
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([])
   const history = useRef(new ProjectHistory())
+  // Labels are mirrored in state so rendering never reads the history ref.
+  const [historyLabels, setHistoryLabels] = useState<{ undo: string | null; redo: string | null }>({
+    undo: null,
+    redo: null,
+  })
+  const syncHistoryLabels = useCallback(() => {
+    const { past, future } = history.current.state
+    setHistoryLabels({ undo: past.at(-1)?.label ?? null, redo: future.at(-1)?.label ?? null })
+  }, [])
   const clipboard = useRef<{ trackId: string; clip: Clip }[]>([])
   const [hasClipboard, setHasClipboard] = useState(false)
   const [recordingTrackId, setRecordingTrackId] = useState<string | null>(null)
@@ -83,13 +92,16 @@ export function useStudio() {
     if (next === previous) return
     // Validate the audio graph before changing the persistent snapshot/history.
     engine.updateMix(next)
-    if (recordHistory) history.current.record(previous, label, mergeKey)
+    if (recordHistory) {
+      history.current.record(previous, label, mergeKey)
+      syncHistoryLabels()
+    }
     next = { ...next, updatedAt: Date.now() }
     projectRef.current = next
     setProject(next)
     setSaveStatus('unsaved')
     if (schedule) engine.reschedule(next)
-  }, [])
+  }, [syncHistoryLabels])
 
   const persist = useCallback(async () => {
     const snapshot = projectRef.current
@@ -131,6 +143,7 @@ export function useStudio() {
     assets.current = new Map((saved?.assets ?? []).map((a) => [a.id, a]))
     projectRef.current = next
     history.current.restore(saved?.history)
+    syncHistoryLabels()
     clipboard.current = []
     setHasClipboard(false)
     setSelectedClipIds([])
@@ -141,7 +154,7 @@ export function useStudio() {
     setSelectedClipId(null)
     setTransport('stopped')
     setPosition(0)
-  }, [])
+  }, [syncHistoryLabels])
 
   const refreshInputs = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return
@@ -564,6 +577,30 @@ export function useStudio() {
     [commit],
   )
 
+  /** Applies one non-destructive patch to every selected clip as a single undo step. */
+  const updateClips = useCallback(
+    (ids: string[], patch: Partial<Pick<Clip, 'gain' | 'fadeIn' | 'fadeOut' | 'name'>>) => {
+      if (busyRef.current || recordMeta.current || !ids.length) return
+      const selected = new Set(ids)
+      commit(
+        {
+          ...projectRef.current,
+          tracks: projectRef.current.tracks.map((t) => ({
+            ...t,
+            clips: t.clips.map((clip) => {
+              if (!selected.has(clip.id)) return clip
+              const sourceDuration = engine.getBuffer(clip.assetId)?.duration ?? clip.duration
+              return editing.editClip(clip, patch, sourceDuration)
+            }),
+          })),
+        },
+        true,
+        'Ajustar clips', `clips:${ids.join()}:${Object.keys(patch).join()}`,
+      )
+    },
+    [commit],
+  )
+
   const removeClip = useCallback(
     (id: string) => {
       if (busyRef.current || recordMeta.current) return
@@ -582,13 +619,17 @@ export function useStudio() {
     try {
       if (engine.inputStatus.monitorTrackId && !next.tracks.some(t => t.id === engine.inputStatus.monitorTrackId)) engine.releaseInput()
       commit(next, true, '', '', false)
+      syncHistoryLabels()
       setSelectedTrackId(id => next.tracks.some(t => t.id === id) ? id : next.tracks[0].id)
       setSelectedClipId(null)
       setSelectedClipIds([])
-    } catch (error) { history.current.restore(before); notify(errorMessage(error), true) }
-  }, [commit, notify])
+    } catch (error) { history.current.restore(before); syncHistoryLabels(); notify(errorMessage(error), true) }
+  }, [commit, notify, syncHistoryLabels])
 
-  const selectionIds = selectedClipIds.length ? selectedClipIds : selectedClipId ? [selectedClipId] : []
+  const selectionIds = useMemo(
+    () => (selectedClipIds.length ? selectedClipIds : selectedClipId ? [selectedClipId] : []),
+    [selectedClipIds, selectedClipId],
+  )
   const deleteSelection = useCallback(() => {
     if (busyRef.current || recordMeta.current || !selectionIds.length) return
     commit(editing.removeClips(projectRef.current, selectionIds), true, 'Eliminar clips')
@@ -648,6 +689,18 @@ export function useStudio() {
     }
     commit({ ...current, tracks }, true, 'Organizar pistas')
   }, [commit, notify])
+  /** Reorder one track by dropping it on another position (drag & drop in the track list). */
+  const moveTrack = useCallback((id: string, toIndex: number) => {
+    if (busyRef.current || recordMeta.current) return
+    const current = projectRef.current
+    const from = current.tracks.findIndex((t) => t.id === id)
+    const to = Math.max(0, Math.min(current.tracks.length - 1, toIndex))
+    if (from < 0 || from === to) return
+    const tracks = [...current.tracks]
+    const [moved] = tracks.splice(from, 1)
+    tracks.splice(to, 0, moved)
+    commit({ ...current, tracks }, true, 'Reordenar pistas')
+  }, [commit])
   const chooseTake = useCallback(async (trackId: string, groupId: string, clipId: string, audition = false) => {
     if (busyRef.current || recordMeta.current) return
     const current = projectRef.current, track = current.tracks.find(t => t.id === trackId)
@@ -884,12 +937,12 @@ export function useStudio() {
     selectedClip,
     selectedClipIds: selectionIds,
     hasClipboard,
-    undoLabel: history.current.state.past.at(-1)?.label,
-    redoLabel: history.current.state.future.at(-1)?.label,
+    undoLabel: historyLabels.undo,
+    redoLabel: historyLabels.redo,
     undo: () => changeHistory('undo'),
     redo: () => changeHistory('redo'),
     copySelection, pasteSelection, duplicateSelection, deleteSelection, splitSelection, moveSelection,
-    trackOperation, chooseTake, updateMarker, updateGroup,
+    trackOperation, moveTrack, chooseTake, updateMarker, updateGroup,
     repeatTake: () => selectedClip && void record(selectedClip.id),
     recordingTrackId,
     recordingStart,
@@ -926,6 +979,7 @@ export function useStudio() {
     updateTrack,
     updateEffects,
     updateClip,
+    updateClips,
     addTrack,
     removeClip,
     importAudio,

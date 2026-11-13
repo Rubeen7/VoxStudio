@@ -146,3 +146,20 @@ export async function renameEffectPreset(id: string, name: string) {
     return next
   } finally { db.close() }
 }
+
+export async function duplicateEffectPreset(id: string) {
+  const db = await database()
+  try {
+    const original = await db.get('presets', id)
+    if (!original) throw new Error('No se encuentra el preset.')
+    const copy: EffectPreset = {
+      ...original,
+      id: crypto.randomUUID(),
+      name: `${original.name} · copia`.slice(0, 60),
+      updatedAt: Date.now(),
+      effects: cloneEffectChain(original.effects),
+    }
+    await db.put('presets', copy)
+    return copy
+  } finally { db.close() }
+}

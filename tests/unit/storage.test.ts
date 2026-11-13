@@ -41,8 +41,13 @@ describe('atomic project persistence', () => {
     })
     await expect(saveProject(broken, [])).rejects.toThrow('falta el audio')
     expect((await loadProject(project.id))?.project.name).toBe(project.name)
+    // Non-destructive policy: the original audio stays on disk even when no clip
+    // references it, so a deleted region can be recovered from a previous session.
     project.tracks[1].clips = []
     await saveProject(project, [])
-    expect((await loadProject(project.id))?.assets).toHaveLength(0)
+    const withoutClips = await loadProject(project.id)
+    expect(withoutClips?.assets).toHaveLength(1)
+    expect(await withoutClips?.assets[0].blob.text()).toBe('real bytes')
+    expect(withoutClips?.project.tracks[1].clips).toEqual([])
   })
 })

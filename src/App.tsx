@@ -589,8 +589,9 @@ export default function App() {
             </p>
             <p>
               <strong>03 · Construye tu arreglo.</strong> Mueve clips, ajusta volumen, panorama,
-              mute y solo. El inspector permite recortar y ajustar el inicio con precisión. Las
-              tomas superpuestas se suman.
+              mute y solo. El inspector permite recortar y ajustar el inicio con precisión; el menú
+              contextual del clip (clic derecho) renombra y ajusta su volumen. Las tomas
+              superpuestas se suman.
             </p>
             <p>
               <strong>04 · Guarda y exporta.</strong> Autoguardado local de proyectos y audios. La
@@ -605,12 +606,47 @@ export default function App() {
                 <kbd>R</kbd> Grabar / finalizar
               </span>
               <span>
+                <kbd>S</kbd> Cortar en el cursor
+              </span>
+              <span>
+                <kbd>M</kbd> Marcador en el cursor
+              </span>
+              <span>
                 <kbd>Inicio</kbd> Volver a cero
+              </span>
+              <span>
+                <kbd>Supr</kbd> Eliminar clips
+              </span>
+              <span>
+                <kbd>+</kbd> <kbd>−</kbd> Zoom del timeline
+              </span>
+              <span>
+                <kbd>Mayús</kbd> Arrastrar sin snap
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + clic Selección múltiple
+              </span>
+              <span>
+                <kbd>Ctrl C</kbd> / <kbd>V</kbd> / <kbd>D</kbd> Copiar, pegar, duplicar
+              </span>
+              <span>
+                <kbd>Ctrl X</kbd> Cortar selección
+              </span>
+              <span>
+                <kbd>Ctrl Z</kbd> / <kbd>Y</kbd> Deshacer / rehacer
+              </span>
+              <span>
+                <kbd>Ctrl A</kbd> Seleccionar todo
               </span>
               <span>
                 <kbd>Ctrl S</kbd> Guardar
               </span>
             </div>
+            <p>
+              <strong>Marcadores y pistas.</strong> En «Marcadores», «Anterior» y «Siguiente»
+              saltan a la sección más cercana. En «Pistas», arrastra una fila para reordenar; Alt +
+              ↑/↓ hace lo mismo con el teclado. Ocultar o contraer solo cambia la vista.
+            </p>
             <p className="microcopy">
               La rejilla es visual: cambiar BPM no estira el audio ni detecta su tempo. Captura mono
               a 48 kHz. El botón de auriculares activa la escucha con efectos, también sin grabar.

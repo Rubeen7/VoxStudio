@@ -24,11 +24,13 @@ export const Waveform = memo(function Waveform({
   color,
   offset = 0,
   duration,
+  gain = 1,
 }: {
   buffer: AudioBuffer
   color: string
   offset?: number
   duration: number
+  gain?: number
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
@@ -48,6 +50,7 @@ export const Waveform = memo(function Waveform({
       const span = (duration * buffer.sampleRate) / BLOCK
       ctx.fillStyle = color
       ctx.globalAlpha = 0.88
+      const scale = Math.min(2, gain)
       for (let x = 0; x < width; x++) {
         const from = Math.floor(start + (span * x) / width)
         const to = Math.min(
@@ -57,9 +60,11 @@ export const Waveform = memo(function Waveform({
         let min = 0
         let max = 0
         for (let bin = from; bin < to; bin++) {
-          min = Math.min(min, envelope.min[bin])
-          max = Math.max(max, envelope.max[bin])
+          min = Math.min(min, envelope.min[bin] * scale)
+          max = Math.max(max, envelope.max[bin] * scale)
         }
+        min = Math.max(-1, min)
+        max = Math.min(1, max)
         const top = ((1 - max) * height) / 2
         ctx.fillRect(x, top, 1, Math.max(0.7, ((max - min) * height) / 2))
       }
@@ -68,6 +73,6 @@ export const Waveform = memo(function Waveform({
     observer.observe(canvas)
     paint()
     return () => observer.disconnect()
-  }, [buffer, color, duration, offset])
+  }, [buffer, color, duration, gain, offset])
   return <canvas ref={ref} className="waveform" aria-label="Forma de onda del audio" role="img" />
 })

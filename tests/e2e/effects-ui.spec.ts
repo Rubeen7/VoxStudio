@@ -1,4 +1,4 @@
-﻿import { expect, test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { encodeWav } from '../../src/audio/wav'
 
@@ -50,15 +50,12 @@ test('effects UI: live audio updates, independent presets, recording, recovery a
 
   await panel.getByText('Presets de cadena', { exact: true }).click()
   await panel.getByLabel('Nombre del preset', { exact: true }).fill('Voz prueba')
-  await panel.getByRole('button', { name: 'Guardar cadena', exact: true }).click()
-  await expect(panel.getByRole('status')).toHaveText('Cadena guardada como preset local.')
+  await panel.getByRole('button', { name: 'Guardar cadena actual', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('Cadena guardada como preset.')
   await page.getByRole('button', { name: 'Seleccionar Voz principal', exact: true }).click()
   await expect(panel.getByRole('group', { name: /^\d+\./ })).toHaveCount(0)
   await panel.getByText('Presets de cadena', { exact: true }).click()
-  await panel
-    .getByLabel('Preset personalizado', { exact: true })
-    .selectOption({ label: 'Voz prueba' })
-  await panel.getByRole('button', { name: 'Cargar cadena', exact: true }).click()
+  await panel.getByRole('button', { name: 'Voz prueba', exact: true }).click()
   await expect(panel.getByRole('group', { name: /^\d+\./ })).toHaveCount(2)
   await panel.getByRole('spinbutton', { name: 'Medios · ganancia', exact: true }).fill('-6')
   await page.getByRole('button', { name: 'Seleccionar Instrumental', exact: true }).click()
@@ -93,9 +90,8 @@ test('effects UI: live audio updates, independent presets, recording, recovery a
     panel.getByRole('spinbutton', { name: 'Medios · ganancia', exact: true }),
   ).toHaveValue('-6')
   await panel.getByText('Presets de cadena', { exact: true }).click()
-  await expect(
-    panel.getByLabel('Preset personalizado', { exact: true }).locator('option'),
-  ).toContainText(['Seleccionar preset…', 'Voz prueba'])
+  await expect(panel.getByRole('button', { name: 'Voz prueba', exact: true })).toBeVisible()
+  await expect(panel.getByText('Presets incluidos', { exact: true })).toBeVisible()
   const download = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Exportar WAV', exact: true }).click()
   const bytes = await readFile((await (await download).path())!)

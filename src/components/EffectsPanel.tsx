@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronDown, Plus, Power, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowDown, ArrowUp, ChevronDown, Copy, Pencil, Plus, Power, Trash2 } from 'lucide-react'
 import type { Studio } from '../hooks/useStudio'
 import {
   cloneEffectChain,
   createEffect,
   effectDefinitions,
+  FACTORY_PRESETS,
   MAX_EFFECTS,
   PITCH_KEYS,
   PITCH_SCALES,
@@ -14,7 +15,13 @@ import {
   type EffectPreset,
   type EffectType,
 } from '../model/effects'
-import { deleteEffectPreset, listEffectPresets, saveEffectPreset } from '../storage/projects'
+import {
+  deleteEffectPreset,
+  duplicateEffectPreset,
+  listEffectPresets,
+  renameEffectPreset,
+  saveEffectPreset,
+} from '../storage/projects'
 import './EffectsPanel.css'
 
 function Parameter({
@@ -93,16 +100,20 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
   const hasPitch = effects.some((effect) => effect.type === 'autotune')
   const [type, setType] = useState<EffectType>('eq')
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [presets, setPresets] = useState<EffectPreset[]>([])
+  const [userPresets, setUserPresets] = useState<EffectPreset[]>([])
   const [presetId, setPresetId] = useState('')
   const [name, setName] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const renameRef = useRef<HTMLInputElement>(null)
+  const [renameValue, setRenameValue] = useState('')
+
   useEffect(() => {
     let active = true
     void listEffectPresets()
       .then((items) => {
-        if (active) setPresets(items)
+        if (active) setUserPresets(items)
       })
       .catch(() => {
         if (active) setMessage({ text: 'No se pudieron leer los presets locales.', error: true })
@@ -111,6 +122,11 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    if (renamingId && renameRef.current) renameRef.current.select()
+  }, [renamingId])
+
   const update = (effect: AudioEffect) =>
     studio.updateEffects(
       track.id,
@@ -125,10 +141,10 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
     setSaving(true)
     try {
       const saved = await saveEffectPreset(name, effects)
-      setPresets((items) => [saved, ...items])
+      setUserPresets((items) => [saved, ...items])
       setPresetId(saved.id)
       setName('')
-      setMessage({ text: 'Cadena guardada como preset local.', error: false })
+      setMessage({ text: 'Cadena guardada como preset.', error: false })
     } catch (error) {
       setMessage({
         text: error instanceof Error ? error.message : 'No se pudo guardar el preset.',
@@ -138,12 +154,12 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
       setSaving(false)
     }
   }
-  const removePreset = async () => {
+  const removePreset = async (id: string) => {
     setSaving(true)
     try {
-      await deleteEffectPreset(presetId)
-      setPresets((items) => items.filter((p) => p.id !== presetId))
-      setPresetId('')
+      await deleteEffectPreset(id)
+      setUserPresets((items) => items.filter((p) => p.id !== id))
+      if (presetId === id) setPresetId('')
       setMessage({ text: 'Preset eliminado. La cadena de la pista se conserva.', error: false })
     } catch {
       setMessage({ text: 'No se pudo eliminar el preset.', error: true })
@@ -151,6 +167,58 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
       setSaving(false)
     }
   }
+  const duplicatePreset = async (id: string) => {
+    setSaving(true)
+    try {
+      const copy = await duplicateEffectPreset(id)
+      setUserPresets((items) => [copy, ...items])
+      setMessage({ text: `Preset duplicado: «${copy.name}».`, error: false })
+    } catch (error) {
+      setMessage({
+        text: error instanceof Error ? error.message : 'No se pudo duplicar el preset.',
+        error: true,
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+  const startRename = (preset: EffectPreset) => {
+    setRenamingId(preset.id)
+    setRenameValue(preset.name)
+  }
+  const commitRename = async () => {
+    if (!renamingId) return
+    setSaving(true)
+    try {
+      const updated = await renameEffectPreset(renamingId, renameValue)
+      setUserPresets((items) => items.map((p) => (p.id === updated.id ? updated : p)))
+      setMessage({ text: 'Preset renombrado.', error: false })
+    } catch (error) {
+      setMessage({
+        text: error instanceof Error ? error.message : 'No se pudo renombrar.',
+        error: true,
+      })
+    } finally {
+      setSaving(false)
+      setRenamingId(null)
+    }
+  }
+
+  const loadPreset = (preset: EffectPreset) => {
+    const chain = cloneEffectChain(preset.effects)
+    studio.updateEffects(track.id, chain)
+    setPresetId(preset.id)
+    setExpanded(chain[0]?.id ?? null)
+    setMessage({
+      text: `Cadena «${preset.name}» cargada en ${track.name}.`,
+      error: false,
+    })
+  }
+
+  // Factory presets first, then the ones saved in this browser.
+  const allPresets = [...FACTORY_PRESETS, ...userPresets]
+  const selectedPreset = allPresets.find(p => p.id === presetId)
+
   return (
     <section className="inspector-section effects-panel" aria-label="Efectos de pista">
       <div className="effects-title">
@@ -314,55 +382,91 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
       </div>
       <details className="effect-presets">
         <summary>Presets de cadena</summary>
-        <label className="field-label">
-          Preset personalizado
-          <select
-            aria-label="Preset personalizado"
-            value={presetId}
-            onChange={(e) => setPresetId(e.target.value)}
-            disabled={saving}
-          >
-            <option value="">Seleccionar preset…</option>
-            {presets.map((preset) => (
-              <option key={preset.id} value={preset.id}>
+        {/* Factory presets */}
+        <p className="microcopy" style={{ marginTop: 8 }}>Presets incluidos</p>
+        <div className="preset-list">
+          {FACTORY_PRESETS.map((preset) => (
+            <div key={preset.id} className="preset-row">
+              <span className="preset-tag factory">VOX</span>
+              <button
+                className="text-button preset-load-btn"
+                disabled={!!studio.busy || recording}
+                onClick={() => loadPreset(preset)}
+                title={`Cargar «${preset.name}» en ${track.name}`}
+              >
                 {preset.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="preset-actions">
-          <button
-            className="button"
-            disabled={
-              saving || !!studio.busy || recording || !presets.some((p) => p.id === presetId)
-            }
-            onClick={() => {
-              const preset = presets.find((p) => p.id === presetId)
-              if (!preset) return
-              const chain = cloneEffectChain(preset.effects)
-              studio.updateEffects(track.id, chain)
-              setExpanded(chain[0]?.id ?? null)
-              setMessage({
-                text: `Cadena «${preset.name}» cargada en ${track.name}.`,
-                error: false,
-              })
-            }}
-          >
-            Cargar cadena
-          </button>
-          <button
-            className="icon-button small"
-            aria-label="Eliminar preset"
-            title="Eliminar preset guardado"
-            disabled={saving || !presetId}
-            onClick={() => void removePreset()}
-          >
-            <Trash2 size={13} />
-          </button>
+              </button>
+            </div>
+          ))}
         </div>
-        <p className="microcopy">
-          Cargar sustituye los efectos de esta pista. Guarda primero su cadena si quieres
-          conservarla.
+        {/* User presets */}
+        {userPresets.length > 0 && (
+          <>
+            <p className="microcopy" style={{ marginTop: 10 }}>Mis presets</p>
+            <div className="preset-list">
+              {userPresets.map((preset) => (
+                <div key={preset.id} className="preset-row">
+                  {renamingId === preset.id ? (
+                    <input
+                      ref={renameRef}
+                      className="take-name-input"
+                      value={renameValue}
+                      maxLength={60}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void commitRename()
+                        if (e.key === 'Escape') setRenamingId(null)
+                      }}
+                      onBlur={() => void commitRename()}
+                      disabled={saving}
+                    />
+                  ) : (
+                    <button
+                      className="text-button preset-load-btn"
+                      disabled={!!studio.busy || recording}
+                      onClick={() => loadPreset(preset)}
+                      title={`Cargar «${preset.name}» en ${track.name}`}
+                    >
+                      {preset.name}
+                    </button>
+                  )}
+                  <button
+                    className="icon-button small"
+                    aria-label={`Renombrar ${preset.name}`}
+                    title="Renombrar preset"
+                    disabled={saving}
+                    onClick={() => (renamingId === preset.id ? void commitRename() : startRename(preset))}
+                  >
+                    <Pencil size={11} />
+                  </button>
+                  <button
+                    className="icon-button small"
+                    aria-label={`Duplicar ${preset.name}`}
+                    title="Duplicar preset"
+                    disabled={saving}
+                    onClick={() => void duplicatePreset(preset.id)}
+                  >
+                    <Copy size={11} />
+                  </button>
+                  <button
+                    className="icon-button small"
+                    aria-label={`Eliminar ${preset.name}`}
+                    title="Eliminar preset"
+                    disabled={saving}
+                    onClick={() => void removePreset(preset.id)}
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {/* Save new preset */}
+        <p className="microcopy" style={{ marginTop: 12 }}>
+          {selectedPreset && !selectedPreset.factory
+            ? `Cadena de «${selectedPreset.name}» activa.`
+            : 'Cargar sustituye los efectos de esta pista.'}
         </p>
         <label className="field-label preset-name">
           Nombre del nuevo preset
@@ -380,7 +484,7 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
           disabled={saving || !!studio.busy || !name.trim() || !effects.length}
           onClick={() => void savePreset()}
         >
-          Guardar cadena
+          Guardar cadena actual
         </button>
         <p className="microcopy">Disponible en los proyectos de este navegador.</p>
       </details>
