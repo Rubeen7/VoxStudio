@@ -6,6 +6,9 @@ import {
   createEffect,
   effectDefinitions,
   MAX_EFFECTS,
+  PITCH_KEYS,
+  PITCH_SCALES,
+  PITCH_MODES,
   type AudioEffect,
   type EffectParameter,
   type EffectPreset,
@@ -25,6 +28,24 @@ function Parameter({
   disabled: boolean
   onChange: (value: number) => void
 }) {
+  if (p.options)
+    return (
+      <label className="field-label effect-parameter">
+        {p.label}
+        <select
+          aria-label={p.label}
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(Number(e.target.value))}
+        >
+          {p.options.map((name, index) => (
+            <option value={index} key={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+    )
   const slider = p.logarithmic ? (Math.log(value / p.min) / Math.log(p.max / p.min)) * 1000 : value
   return (
     <div className="effect-parameter">
@@ -68,6 +89,8 @@ function Parameter({
 export function EffectsPanel({ studio }: { studio: Studio }) {
   const track = studio.selectedTrack
   const effects = track.effects
+  const recording = studio.transport === 'recording'
+  const hasPitch = effects.some((effect) => effect.type === 'autotune')
   const [type, setType] = useState<EffectType>('eq')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [presets, setPresets] = useState<EffectPreset[]>([])
@@ -154,7 +177,11 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
           className="button"
           aria-label="Añadir efecto"
           title="Añadir efecto al final de la cadena"
-          disabled={!!studio.busy || effects.length >= MAX_EFFECTS}
+          disabled={
+            !!studio.busy ||
+            effects.length >= MAX_EFFECTS ||
+            (type === 'autotune' && (hasPitch || recording))
+          }
           onClick={() => {
             const effect = createEffect(type)
             studio.updateEffects(track.id, [...effects, effect])
@@ -164,6 +191,13 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
           <Plus size={14} />
         </button>
       </div>
+      {type === 'autotune' && (hasPitch || recording) && (
+        <p className="microcopy">
+          {hasPitch
+            ? 'Un corrector de afinación por pista.'
+            : 'Añade la afinación cuando termine la toma.'}
+        </p>
+      )}
       {effects.length === 0 && (
         <p className="microcopy">Sin efectos. La pista reproduce el audio original.</p>
       )}
@@ -222,7 +256,7 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
                   className="icon-button small"
                   aria-label="Eliminar efecto"
                   title="Eliminar efecto"
-                  disabled={!!studio.busy}
+                  disabled={!!studio.busy || (effect.type === 'autotune' && recording)}
                   onClick={() =>
                     studio.updateEffects(
                       track.id,
@@ -233,6 +267,12 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
                   <Trash2 size={12} />
                 </button>
               </div>
+              {effect.type === 'autotune' && (
+                <p className="pitch-summary microcopy">
+                  {PITCH_KEYS[effect.params.key]} · {PITCH_SCALES[effect.params.scale]} ·
+                  Reproducción / WAV
+                </p>
+              )}
               {expanded === effect.id && (
                 <div className="effect-settings" id={`effect-${effect.id}`}>
                   <p className="microcopy">{definition.description}</p>
@@ -245,11 +285,27 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
                       definition={parameter}
                       value={effect.params[parameter.key]}
                       disabled={!!studio.busy}
-                      onChange={(value) =>
-                        update({ ...effect, params: { ...effect.params, [parameter.key]: value } })
-                      }
+                      onChange={(value) => {
+                        const params = { ...effect.params, [parameter.key]: value }
+                        if (effect.type === 'autotune' && parameter.key === 'mode') {
+                          const mode = PITCH_MODES[value]
+                          Object.assign(params, {
+                            retune: mode.retune,
+                            amount: mode.amount,
+                            humanize: mode.humanize,
+                          })
+                        }
+                        update({ ...effect, params })
+                      }}
                     />
                   ))}
+                  {effect.type === 'autotune' && (
+                    <p className="microcopy">
+                      Retune bajo: corrección más rápida. Humanize conserva parte del vibrato en
+                      notas sostenidas. La compensación de formantes es aproximada; compara con
+                      bypass.
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -277,7 +333,9 @@ export function EffectsPanel({ studio }: { studio: Studio }) {
         <div className="preset-actions">
           <button
             className="button"
-            disabled={saving || !!studio.busy || !presets.some((p) => p.id === presetId)}
+            disabled={
+              saving || !!studio.busy || recording || !presets.some((p) => p.id === presetId)
+            }
             onClick={() => {
               const preset = presets.find((p) => p.id === presetId)
               if (!preset) return

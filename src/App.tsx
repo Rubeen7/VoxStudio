@@ -38,17 +38,23 @@ import {
 } from './model/project'
 import './App.css'
 import { MAX_EFFECT_TAIL } from './model/effects'
+import { timelineSettings } from './model/editing'
+import { ClipTools } from './components/ClipTools'
+import { TrackList } from './components/TrackOrganization'
+import { MarkersPanel } from './components/MarkersPanel'
 
 export default function App() {
   const studio = useStudio()
   const fileInput = useRef<HTMLInputElement>(null)
   const mixerToggle = useRef<HTMLButtonElement>(null)
   const inspectorToggle = useRef<HTMLButtonElement>(null)
-  const [scale, setScale] = useState(42)
-  const [snap, setSnap] = useState(false)
+  const timeline = timelineSettings(studio.project)
+  const { scale, snap } = timeline
+  const setScale = (scale: number) => studio.updateProject({ timeline: { ...timeline, scale } })
+  const setSnap = (snap: boolean) => studio.updateProject({ timeline: { ...timeline, snap } })
   const [mixer, setMixer] = useState(true)
   const [inspector, setInspector] = useState(true)
-  const [dialog, setDialog] = useState<'add' | 'help' | null>(null)
+  const [dialog, setDialog] = useState<'add' | 'help' | 'tracks' | 'markers' | null>(null)
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
   const [trackKind, setTrackKind] = useState<TrackKind>('lead')
@@ -316,13 +322,16 @@ export default function App() {
               <span className="toolbar-divider" />
               <button
                 className={`icon-button small ${snap ? 'toggled' : ''}`}
-                aria-label="Ajustar a rejilla de semicorcheas"
+                aria-label="Ajustar a rejilla"
                 aria-pressed={snap}
-                title="Ajustar a rejilla (1/16). Mayús para omitir."
+                title="Activar ajuste magnético. Mayús al arrastrar lo omite."
                 onClick={() => setSnap(!snap)}
               >
                 <Magnet size={15} />
               </button>
+              <select className="grid-select" aria-label="Resolución de rejilla" value={timeline.grid} disabled={studio.locked} onChange={e => studio.updateProject({ timeline: { ...timeline, grid: Number(e.target.value) } })}>
+                <option value={4}>Compás</option><option value={1}>1/4</option><option value={0.5}>1/8</option><option value={0.25}>1/16</option><option value={0.125}>1/32</option>
+              </select>
               <button
                 className="icon-button small"
                 aria-label="Alejar timeline"
@@ -335,8 +344,8 @@ export default function App() {
               <button
                 className="icon-button small"
                 aria-label="Acercar timeline"
-                onClick={() => setScale(Math.min(180, scale * 1.3))}
-                disabled={scale >= 180}
+                onClick={() => setScale(Math.min(720, scale * 1.3))}
+                disabled={scale >= 720}
               >
                 <ZoomIn size={15} />
               </button>
@@ -366,10 +375,10 @@ export default function App() {
               </button>
             </div>
           </div>
+          <ClipTools studio={studio} onTracks={() => setDialog('tracks')} onMarkers={() => setDialog('markers')} />
           <Timeline
             studio={studio}
             scale={scale}
-            snap={snap}
             onImport={importClick}
             onAdd={() => setDialog('add')}
           />
@@ -614,6 +623,8 @@ export default function App() {
           </div>
         </Dialog>
       )}
+      {dialog === 'tracks' && <Dialog title="Organizar pistas" onClose={() => setDialog(null)}><TrackList studio={studio} /></Dialog>}
+      {dialog === 'markers' && <Dialog title="Marcadores de canción" onClose={() => setDialog(null)}><MarkersPanel studio={studio} /></Dialog>}
     </main>
   )
 }

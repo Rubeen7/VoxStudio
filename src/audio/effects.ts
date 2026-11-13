@@ -1,5 +1,6 @@
 import type { AudioEffect } from '../model/effects'
 import dynamicsUrl from './dynamics.worklet.js?url'
+import { preparePitch, pitchModule } from './pitch'
 
 const modules = new WeakMap<BaseAudioContext, Promise<void>>()
 export function prepareEffects(context: BaseAudioContext) {
@@ -11,10 +12,12 @@ export function prepareEffects(context: BaseAudioContext) {
     )
   let task = modules.get(context)
   if (!task) {
-    task = context.audioWorklet.addModule(dynamicsUrl).catch((error: unknown) => {
-      modules.delete(context)
-      throw error
-    })
+    task = Promise.all([context.audioWorklet.addModule(dynamicsUrl), preparePitch(context)])
+      .then(() => {})
+      .catch((error: unknown) => {
+        modules.delete(context)
+        throw error
+      })
     modules.set(context, task)
   }
   return task
@@ -72,6 +75,43 @@ export interface EffectNode {
 }
 
 export function createEffectNode(context: BaseAudioContext, initial: AudioEffect): EffectNode {
+  if (initial.type === 'autotune') {
+    const input = context.createGain()
+    const output = context.createGain()
+    const processor = new AudioWorkletNode(context, 'vox-pitch', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 2,
+      channelCountMode: 'max',
+      processorOptions: { module: pitchModule() },
+    })
+    input.connect(processor).connect(output)
+    const update = (effect: AudioEffect, immediate = false) => {
+      for (const [name, value] of Object.entries(effect.params)) {
+        const parameter = processor.parameters.get(name)
+        if (parameter)
+          setAudioParam(
+            parameter,
+            name === 'mix' && !effect.enabled ? 0 : value,
+            context,
+            immediate || name === 'key' || name === 'scale',
+          )
+      }
+    }
+    update(initial, true)
+    return {
+      input,
+      output,
+      update,
+      dispose: () => {
+        input.disconnect()
+        processor.disconnect()
+        output.disconnect()
+        processor.port.postMessage('dispose')
+        processor.port.close()
+      },
+    }
+  }
   const nodes = new Set<AudioNode>()
   const timers = new Set<ReturnType<typeof setTimeout>>()
   const own = <T extends AudioNode>(node: T): T => {

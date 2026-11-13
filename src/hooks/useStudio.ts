@@ -8,6 +8,7 @@ import {
   MAX_SECONDS,
   projectDuration,
   projectPlaybackDuration,
+  playableClips,
   type AudioAsset,
   type Clip,
   type Project,
@@ -16,6 +17,8 @@ import {
 } from '../model/project'
 import * as storage from '../storage/projects'
 import { normalizeEffects, type AudioEffect } from '../model/effects'
+import { ProjectHistory } from '../model/history'
+import * as editing from '../model/editing'
 import type { LatencyMode } from '../audio/MicrophoneInput'
 
 function errorMessage(error: unknown) {
@@ -54,9 +57,13 @@ export function useStudio() {
   const [levels, setLevels] = useState({ master: 0, input: 0 })
   const [selectedTrackId, setSelectedTrackId] = useState(project.tracks[1].id)
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null)
+  const [selectedClipIds, setSelectedClipIds] = useState<string[]>([])
+  const history = useRef(new ProjectHistory())
+  const clipboard = useRef<{ trackId: string; clip: Clip }[]>([])
+  const [hasClipboard, setHasClipboard] = useState(false)
   const [recordingTrackId, setRecordingTrackId] = useState<string | null>(null)
   const [recordingStart, setRecordingStart] = useState(0)
-  const recordMeta = useRef<{ trackId: string; position: number; maxDuration: number } | null>(null)
+  const recordMeta = useRef<{ trackId: string; position: number; maxDuration: number; repeatClipId?: string } | null>(null)
   const finishRef = useRef<() => Promise<void>>(async () => {})
   const [library, setLibrary] = useState<Project[] | null>(null)
   const [input, setInput] = useState(() => engine.inputStatus)
@@ -71,22 +78,27 @@ export function useStudio() {
     setBusy(value)
   }, [])
 
-  const commit = useCallback((next: Project, schedule = false) => {
+  const commit = useCallback((next: Project, schedule = false, label = 'Editar proyecto', mergeKey = '', recordHistory = true) => {
+    const previous = projectRef.current
+    if (next === previous) return
+    // Validate the audio graph before changing the persistent snapshot/history.
+    engine.updateMix(next)
+    if (recordHistory) history.current.record(previous, label, mergeKey)
     next = { ...next, updatedAt: Date.now() }
     projectRef.current = next
     setProject(next)
     setSaveStatus('unsaved')
-    engine.updateMix(next)
     if (schedule) engine.reschedule(next)
   }, [])
 
   const persist = useCallback(async () => {
     const snapshot = projectRef.current
     const snapshotAssets = [...assets.current.values()]
+    const snapshotHistory = history.current.state
     setSaveStatus('saving')
     const task = saveQueue.current
       .catch(() => {})
-      .then(() => storage.saveProject(snapshot, snapshotAssets))
+      .then(() => storage.saveProject(snapshot, snapshotAssets, snapshotHistory))
     saveQueue.current = task
     try {
       await task
@@ -118,6 +130,10 @@ export function useStudio() {
     engine.replaceBuffers(buffers)
     assets.current = new Map((saved?.assets ?? []).map((a) => [a.id, a]))
     projectRef.current = next
+    history.current.restore(saved?.history)
+    clipboard.current = []
+    setHasClipboard(false)
+    setSelectedClipIds([])
     setProject(next)
     savedSnapshot.current = saved ? next : null
     setSaveStatus(saved ? 'saved' : 'unsaved')
@@ -253,13 +269,24 @@ export function useStudio() {
           offset: 0,
           duration: Math.min(captured.buffer.duration, MAX_SECONDS - meta.position),
         }
+        const previousTake = track.clips.find(c => c.id === meta.repeatClipId)
+        const existingGroup = track.takeGroups?.find(g => g.id === previousTake?.takeGroupId)
+        const takeGroup = previousTake ? existingGroup ?? {
+          id: crypto.randomUUID(), name: previousTake.name, start: previousTake.start,
+          duration: previousTake.duration, activeTakeId: previousTake.id,
+        } : undefined
+        if (takeGroup) clip.takeGroupId = takeGroup.id
         commit({
           ...current,
           tracks: current.tracks.map((t) =>
-            t.id === meta.trackId ? { ...t, clips: [...t.clips, clip] } : t,
+            t.id === meta.trackId ? { ...t,
+              clips: [...t.clips.map(c => c.id === previousTake?.id ? { ...c, takeGroupId: takeGroup!.id } : c), clip],
+              takeGroups: takeGroup ? [...(t.takeGroups ?? []).filter(g => g.id !== takeGroup.id), { ...takeGroup, activeTakeId: clip.id }] : t.takeGroups,
+            } : t,
           ),
-        })
+        }, false, takeGroup ? 'Grabar otra toma' : 'Grabar voz')
         setSelectedClipId(clip.id)
+        setSelectedClipIds([clip.id])
         await persist()
         notify(
           captured.recovered
@@ -411,7 +438,7 @@ export function useStudio() {
     setPosition(0)
   }, [finishRecording])
 
-  const record = useCallback(async () => {
+  const record = useCallback(async (repeatClipId?: string) => {
     if (busyRef.current) return
     if (recordMeta.current) {
       await finishRecording()
@@ -425,20 +452,26 @@ export function useStudio() {
     }
     engine.pause()
     setTransport('paused')
-    const position = engine.position
+    const previousTake = track.clips.find(c => c.id === repeatClipId)
+    const section = track.takeGroups?.find(g => g.id === previousTake?.takeGroupId)
+    const position = section?.start ?? previousTake?.start ?? engine.position
     const maxDuration = Math.min(
       MAX_SECONDS - position,
       (MAX_DECODED_BYTES - engine.decodedBytes) / (engine.sampleRate * 4),
+      section?.duration ?? previousTake?.duration ?? MAX_SECONDS,
     )
-    if (maxDuration < 1) {
+    if (maxDuration < (previousTake ? 0.03 : 1)) {
       notify('Has alcanzado el límite de sesión o de memoria. Abre un proyecto nuevo.', true)
       return
     }
     setOperation('Esperando al micrófono…')
     try {
-      await engine.startRecording(current, position, maxDuration, track.id)
+      const playback = previousTake ? { ...current, tracks: current.tracks.map(t => t.id === track.id ? {
+        ...t, clips: t.clips.filter(c => c.id !== previousTake.id && (!section || c.takeGroupId !== section.id)),
+      } : t) } : current
+      await engine.startRecording(playback, position, maxDuration, track.id)
       void refreshInputs()
-      recordMeta.current = { trackId: track.id, position, maxDuration }
+      recordMeta.current = { trackId: track.id, position, maxDuration, repeatClipId }
       setRecordingTrackId(track.id)
       setRecordingStart(position)
       setTransport('recording')
@@ -457,20 +490,21 @@ export function useStudio() {
   }, [])
 
   const updateProject = useCallback(
-    (patch: Partial<Pick<Project, 'name' | 'bpm' | 'masterVolume'>>) => {
+    (patch: Partial<Pick<Project, 'name' | 'bpm' | 'masterVolume' | 'timeline'>>) => {
       if (busyRef.current) return
-      commit({ ...projectRef.current, ...patch })
+      commit({ ...projectRef.current, ...patch }, false, 'Ajustar proyecto', `project:${Object.keys(patch).join()}`)
     },
     [commit],
   )
 
   const updateTrack = useCallback(
-    (id: string, patch: Partial<Pick<Track, 'name' | 'volume' | 'pan' | 'muted' | 'solo'>>) => {
+    (id: string, patch: Partial<Pick<Track, 'name' | 'volume' | 'pan' | 'muted' | 'solo' | 'color' | 'hidden' | 'collapsed' | 'group' | 'kind'>>) => {
       if (busyRef.current) return
+      if (recordMeta.current && Object.keys(patch).some(key => !['volume','pan','muted','solo'].includes(key))) return
       commit({
         ...projectRef.current,
         tracks: projectRef.current.tracks.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-      })
+      }, false, 'Ajustar pista', `track:${id}:${Object.keys(patch).join()}`)
     },
     [commit],
   )
@@ -488,7 +522,7 @@ export function useStudio() {
       try {
         // Validate/update the live graph before persisting this edit.
         engine.updateMix(next)
-        commit(next)
+        commit(next, false, 'Ajustar efectos', `effects:${trackId}:${effects.map(e => e.id).join()}`)
       } catch (error) {
         engine.updateMix(previous)
         notify(`No se pudo aplicar el efecto: ${errorMessage(error)}`, true)
@@ -509,7 +543,7 @@ export function useStudio() {
   )
 
   const updateClip = useCallback(
-    (id: string, patch: Partial<Pick<Clip, 'start' | 'offset' | 'duration' | 'name'>>) => {
+    (id: string, patch: Partial<Clip>) => {
       if (busyRef.current || recordMeta.current) return
       commit(
         {
@@ -518,31 +552,13 @@ export function useStudio() {
             ...t,
             clips: t.clips.map((clip) => {
               if (clip.id !== id) return clip
-              const next = { ...clip, ...patch }
               const sourceDuration = engine.getBuffer(clip.assetId)?.duration ?? clip.duration
-              next.offset = Math.min(
-                Math.max(0, Number.isFinite(next.offset) ? next.offset : clip.offset),
-                Math.max(0, sourceDuration - 0.01),
-              )
-              next.duration = Math.max(
-                0.01,
-                Math.min(
-                  Number.isFinite(next.duration) ? next.duration : clip.duration,
-                  sourceDuration - next.offset,
-                ),
-              )
-              next.start = Math.max(
-                0,
-                Math.min(
-                  Number.isFinite(next.start) ? next.start : clip.start,
-                  MAX_SECONDS - next.duration,
-                ),
-              )
-              return next
+              return editing.editClip(clip, patch, sourceDuration)
             }),
           })),
         },
         true,
+        'Editar clip', `clip:${id}:${Object.keys(patch).join()}`,
       )
     },
     [commit],
@@ -551,29 +567,117 @@ export function useStudio() {
   const removeClip = useCallback(
     (id: string) => {
       if (busyRef.current || recordMeta.current) return
-      commit(
-        {
-          ...projectRef.current,
-          tracks: projectRef.current.tracks.map((t) => ({
-            ...t,
-            clips: t.clips.filter((c) => c.id !== id),
-          })),
-        },
-        true,
-      )
-      const referenced = new Set(
-        projectRef.current.tracks.flatMap((t) => t.clips.map((c) => c.assetId)),
-      )
-      for (const assetId of assets.current.keys()) {
-        if (!referenced.has(assetId)) {
-          assets.current.delete(assetId)
-          engine.removeBuffer(assetId)
-        }
-      }
+      commit(editing.removeClips(projectRef.current, [id]), true, 'Eliminar clip')
       setSelectedClipId(null)
+      setSelectedClipIds([])
     },
     [commit],
   )
+
+  const changeHistory = useCallback((direction: 'undo' | 'redo') => {
+    if (busyRef.current || recordMeta.current) return
+    const before = history.current.state
+    const next = history.current[direction](projectRef.current)
+    if (!next) return
+    try {
+      if (engine.inputStatus.monitorTrackId && !next.tracks.some(t => t.id === engine.inputStatus.monitorTrackId)) engine.releaseInput()
+      commit(next, true, '', '', false)
+      setSelectedTrackId(id => next.tracks.some(t => t.id === id) ? id : next.tracks[0].id)
+      setSelectedClipId(null)
+      setSelectedClipIds([])
+    } catch (error) { history.current.restore(before); notify(errorMessage(error), true) }
+  }, [commit, notify])
+
+  const selectionIds = selectedClipIds.length ? selectedClipIds : selectedClipId ? [selectedClipId] : []
+  const deleteSelection = useCallback(() => {
+    if (busyRef.current || recordMeta.current || !selectionIds.length) return
+    commit(editing.removeClips(projectRef.current, selectionIds), true, 'Eliminar clips')
+    setSelectedClipIds([]); setSelectedClipId(null)
+  }, [commit, selectionIds])
+  const splitSelection = useCallback(() => {
+    if (busyRef.current || recordMeta.current) return
+    const next = editing.splitSelected(projectRef.current, selectionIds, engine.position)
+    if (next === projectRef.current) { notify('Coloca el cursor dentro del clip que quieres cortar.'); return }
+    commit(next, true, 'Cortar clips')
+  }, [commit, notify, selectionIds])
+  const copySelection = useCallback(() => {
+    if (!selectionIds.length) return
+    clipboard.current = projectRef.current.tracks.flatMap(t => t.clips.filter(c => selectionIds.includes(c.id)).map(clip => ({ trackId: t.id, clip: structuredClone(clip) })))
+    setHasClipboard(!!clipboard.current.length)
+  }, [selectionIds])
+  const insertCopies = useCallback((items: { trackId: string; clip: Clip }[], at: number, toSelectedTrack: boolean) => {
+    if (busyRef.current || recordMeta.current || !items.length) return
+    const origin = Math.min(...items.map(i => i.clip.start))
+    const span = Math.max(...items.map(i => i.clip.start + i.clip.duration)) - origin
+    const start = Math.max(0, Math.min(MAX_SECONDS - span, at))
+    const singleSource = new Set(items.map(i => i.trackId)).size === 1
+    const copies = items.map(({ trackId, clip }) => ({ trackId: toSelectedTrack && singleSource ? selectedTrackId : trackId,
+      clip: { ...structuredClone(clip), id: crypto.randomUUID(), takeGroupId: undefined, start: editing.sampleTime(start + clip.start - origin) } }))
+    if (copies.some(item => !projectRef.current.tracks.some(t => t.id === item.trackId))) { notify('La pista de origen ya no existe. Pega una selección de una sola pista en la pista actual.', true); return }
+    commit({ ...projectRef.current, tracks: projectRef.current.tracks.map(t => ({ ...t, clips: [...t.clips, ...copies.filter(c => c.trackId === t.id).map(c => c.clip)] })) }, true, 'Duplicar / pegar clips')
+    setSelectedClipIds(copies.map(c => c.clip.id)); setSelectedClipId(copies[0].clip.id); setSelectedTrackId(copies[0].trackId)
+  }, [commit, notify, selectedTrackId])
+  const pasteSelection = useCallback(() => insertCopies(clipboard.current, engine.position, true), [insertCopies])
+  const duplicateSelection = useCallback(() => {
+    const items = projectRef.current.tracks.flatMap(t => t.clips.filter(c => selectionIds.includes(c.id)).map(clip => ({ trackId: t.id, clip })))
+    insertCopies(items, Math.max(0, ...items.map(i => i.clip.start + i.clip.duration)), false)
+  }, [insertCopies, selectionIds])
+  const moveSelection = useCallback((ids: string[], delta: number, destinationId?: string) => {
+    if (busyRef.current || recordMeta.current) return
+    commit(editing.moveClips(projectRef.current, ids, delta, destinationId), true, 'Mover clips')
+    if (destinationId) setSelectedTrackId(destinationId)
+  }, [commit])
+  const trackOperation = useCallback((id: string, operation: 'delete' | 'duplicate' | 'up' | 'down') => {
+    if (busyRef.current || recordMeta.current) return
+    const current = projectRef.current, index = current.tracks.findIndex(t => t.id === id)
+    if (index < 0) return
+    const tracks = [...current.tracks]
+    if (operation === 'delete') {
+      if (tracks.length === 1) { notify('Conserva al menos una pista.'); return }
+      if (engine.inputStatus.monitorTrackId === id) engine.releaseInput()
+      tracks.splice(index, 1)
+      setSelectedTrackId(tracks[Math.min(index, tracks.length - 1)].id)
+      setSelectedClipIds([]); setSelectedClipId(null)
+    } else if (operation === 'duplicate') {
+      const copy = editing.duplicateTrack(tracks[index])
+      tracks.splice(index + 1, 0, copy); setSelectedTrackId(copy.id)
+    } else {
+      const target = index + (operation === 'up' ? -1 : 1)
+      if (target < 0 || target >= tracks.length) return
+      ;[tracks[index], tracks[target]] = [tracks[target], tracks[index]]
+    }
+    commit({ ...current, tracks }, true, 'Organizar pistas')
+  }, [commit, notify])
+  const chooseTake = useCallback(async (trackId: string, groupId: string, clipId: string, audition = false) => {
+    if (busyRef.current || recordMeta.current) return
+    const current = projectRef.current, track = current.tracks.find(t => t.id === trackId)
+    if (!track?.clips.some(c => c.id === clipId && c.takeGroupId === groupId)) return
+    const next = { ...current, tracks: current.tracks.map(t => t.id === trackId ? {
+      ...t, takeGroups: t.takeGroups?.map(g => g.id === groupId ? { ...g, activeTakeId: clipId } : g),
+    } : t) }
+    commit(next, true, 'Elegir toma')
+    setSelectedClipId(clipId); setSelectedClipIds([clipId]); setSelectedTrackId(trackId)
+    if (audition) {
+      setOperation('Preparando audio…')
+      try { await engine.play(next, track.takeGroups!.find(g => g.id === groupId)!.start); setTransport('playing') }
+      catch (error) { notify(errorMessage(error), true) }
+      finally { setOperation(null) }
+    }
+  }, [commit, notify, setOperation])
+  const updateMarker = useCallback((id: string | null, patch: { name?: string; time?: number }, remove = false) => {
+    if (busyRef.current || recordMeta.current) return
+    const markers = [...(projectRef.current.markers ?? [])]
+    if (!id) markers.push({ id: crypto.randomUUID(), name: patch.name ?? 'Sección', time: editing.sampleTime(engine.position) })
+    const next = markers.filter(m => !remove || m.id !== id).map(m => m.id === id ? {
+      ...m, ...patch, time: editing.sampleTime(Math.max(0, Math.min(MAX_SECONDS, Number.isFinite(patch.time) ? patch.time! : m.time))),
+    } : m).sort((a,b) => a.time - b.time)
+    commit({ ...projectRef.current, markers: next }, false, 'Editar marcadores', id && !remove ? `marker:${id}` : '')
+  }, [commit])
+
+  const updateGroup = useCallback((group: string, patch: Pick<Track, 'collapsed'>) => {
+    if (busyRef.current || recordMeta.current) return
+    commit({ ...projectRef.current, tracks: projectRef.current.tracks.map(t => t.group === group ? { ...t, ...patch } : t) }, false, 'Organizar grupo')
+  }, [commit])
 
   const importAudio = useCallback(
     async (files: File[]) => {
@@ -635,6 +739,7 @@ export function useStudio() {
             ),
           })
           setSelectedClipId(clip.id)
+          setSelectedClipIds([clip.id])
           setSelectedTrackId(track.id)
           imported++
         }
@@ -726,7 +831,25 @@ export function useStudio() {
       }
       if (element.closest('input, textarea, select, dialog, [role="dialog"]') || event.altKey)
         return
-      if (event.ctrlKey || event.metaKey) return
+      if (event.ctrlKey || event.metaKey) {
+        const key = event.key.toLowerCase()
+        const actions: Record<string, () => void> = {
+          z: () => changeHistory(event.shiftKey ? 'redo' : 'undo'), y: () => changeHistory('redo'),
+          c: copySelection, v: pasteSelection, d: duplicateSelection,
+          x: () => { copySelection(); deleteSelection() },
+          a: () => { const ids = projectRef.current.tracks.flatMap(t => t.hidden ? [] : playableClips(t).map(c => c.id)); setSelectedClipIds(ids); setSelectedClipId(ids[0] ?? null) },
+        }
+        if (actions[key]) { event.preventDefault(); actions[key]() }
+        return
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteSelection() }
+      if (event.key.toLowerCase() === 's') { event.preventDefault(); splitSelection() }
+      if (event.key.toLowerCase() === 'm') { event.preventDefault(); updateMarker(null, { name: 'Sección' }) }
+      if (['+', '=', '-'].includes(event.key)) {
+        event.preventDefault()
+        const timeline = editing.timelineSettings(projectRef.current)
+        updateProject({ timeline: { ...timeline, scale: Math.max(12, Math.min(720, timeline.scale * (event.key === '-' ? 1 / 1.3 : 1.3))) } })
+      }
       if (event.code === 'Space' && element.closest('button')) return
       if (event.code === 'Space') {
         event.preventDefault()
@@ -744,7 +867,7 @@ export function useStudio() {
     }
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
-  }, [finishRecording, playPause, record, save, seek])
+  }, [finishRecording, playPause, record, save, seek, changeHistory, copySelection, pasteSelection, duplicateSelection, deleteSelection, splitSelection, updateMarker, updateProject])
 
   const selectedTrack = project.tracks.find((t) => t.id === selectedTrackId) ?? project.tracks[0]
   const selectedClip = project.tracks.flatMap((t) => t.clips).find((c) => c.id === selectedClipId)
@@ -759,6 +882,15 @@ export function useStudio() {
     levels,
     selectedTrack,
     selectedClip,
+    selectedClipIds: selectionIds,
+    hasClipboard,
+    undoLabel: history.current.state.past.at(-1)?.label,
+    redoLabel: history.current.state.future.at(-1)?.label,
+    undo: () => changeHistory('undo'),
+    redo: () => changeHistory('redo'),
+    copySelection, pasteSelection, duplicateSelection, deleteSelection, splitSelection, moveSelection,
+    trackOperation, chooseTake, updateMarker, updateGroup,
+    repeatTake: () => selectedClip && void record(selectedClip.id),
     recordingTrackId,
     recordingStart,
     library,
@@ -776,10 +908,13 @@ export function useStudio() {
     selectTrack: (id: string) => {
       setSelectedTrackId(id)
       setSelectedClipId(null)
+      setSelectedClipIds([])
     },
-    selectClip: (trackId: string, clipId: string) => {
+    selectClip: (trackId: string, clipId: string, additive = false, preserve = false) => {
       setSelectedTrackId(trackId)
       setSelectedClipId(clipId)
+      setSelectedClipIds(ids => additive ? ids.includes(clipId) ? ids.filter(id => id !== clipId) : [...ids, clipId]
+        : preserve && ids.includes(clipId) ? ids : [clipId])
     },
     dismissNotice: () => setNotice(null),
     closeLibrary: () => setLibrary(null),

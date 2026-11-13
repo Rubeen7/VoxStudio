@@ -1,6 +1,6 @@
 import type { Project } from '../model/project'
 import {
-  clipWindow,
+  playableClips,
   isAudible,
   MAX_SECONDS,
   projectDuration,
@@ -12,6 +12,8 @@ import { encodeWav } from './wav'
 import recorderUrl from './recorder.worklet.js?url'
 import { createTrackChannel, type TrackChannel } from './graph'
 import { MicrophoneInput, type LatencyMode } from './MicrophoneInput'
+import { pitchFrames } from './pitch'
+import { scheduleClip } from './clip'
 
 export type TransportState = 'stopped' | 'playing' | 'paused' | 'recording'
 type Capture = {
@@ -27,6 +29,7 @@ export class AudioEngine {
   private analyser?: AnalyserNode
   private tailGate?: GainNode
   private sources: AudioBufferSourceNode[] = []
+  private clipLevels: GainNode[] = []
   private channels = new Map<string, TrackChannel>()
   private buffers = new Map<string, AudioBuffer>()
   private capture?: Capture
@@ -145,7 +148,7 @@ export class AudioEngine {
     try {
       // Same track DSP factory as playback/export, instantiated once for the live input.
       // This separate source needs its own post-FX listening level; it never feeds the recorder.
-      channel = createTrackChannel(context, track, project, level)
+      channel = createTrackChannel(context, track, project, level, { monitor: true })
       this.disconnectMonitor()
       level.connect(this.master!)
       input.mono.connect(channel.input)
@@ -274,6 +277,8 @@ export class AudioEngine {
       source.disconnect()
     })
     this.sources = []
+    this.clipLevels.forEach(node => node.disconnect())
+    this.clipLevels = []
     this.channels.forEach((channel) => channel.dispose())
     this.channels.clear()
   }
@@ -281,28 +286,24 @@ export class AudioEngine {
   private schedule(project: Project, position: number, when: number, includeTailFade = true) {
     const context = this.getContext()
     this.clearSources()
+    const latencyFrames = Math.max(0, ...project.tracks.map((track) => pitchFrames(track.effects)))
+    // Warm the detector from earlier audio after a seek; gate this pre-roll from the speakers.
+    const preRoll = latencyFrames ? Math.min(position, 0.15) : 0
     this.offset = position
-    this.anchor = when
+    this.anchor = when + latencyFrames / context.sampleRate + preRoll
     this.master!.gain.value = project.masterVolume
     this.tailGate!.gain.cancelScheduledValues(context.currentTime)
-    this.tailGate!.gain.setValueAtTime(1, context.currentTime)
+    this.tailGate!.gain.setValueAtTime(0, context.currentTime)
+    this.tailGate!.gain.setValueAtTime(1, this.anchor)
     if (includeTailFade) this.scheduleTailFade(project)
     for (const track of project.tracks) {
-      const channel = createTrackChannel(context, track, project, this.tailGate!)
+      const channel = createTrackChannel(context, track, project, this.tailGate!, { latencyFrames })
       this.channels.set(track.id, channel)
-      for (const clip of track.clips) {
+      for (const clip of playableClips(track)) {
         const buffer = this.buffers.get(clip.assetId)
-        const window = clipWindow(clip, position)
-        if (!buffer || !window) continue
-        const source = context.createBufferSource()
-        source.buffer = buffer
-        source.connect(channel.input)
-        source.start(
-          when + window.delay,
-          window.offset,
-          Math.min(window.duration, buffer.duration - window.offset),
-        )
-        this.sources.push(source)
+        if (!buffer) continue
+        const scheduled = scheduleClip(context, buffer, clip, position - preRoll, when, channel.input)
+        if (scheduled) { this.sources.push(scheduled.source); this.clipLevels.push(scheduled.level) }
       }
     }
   }
@@ -312,7 +313,8 @@ export class AudioEngine {
     const gain = this.tailGate!.gain
     const duration = projectPlaybackDuration(project)
     gain.cancelScheduledValues(context.currentTime)
-    gain.setValueAtTime(1, context.currentTime)
+    gain.setValueAtTime(context.currentTime < this.anchor ? 0 : 1, context.currentTime)
+    if (context.currentTime < this.anchor) gain.setValueAtTime(1, this.anchor)
     if (duration <= projectDuration(project)) return
     const end = this.anchor + duration - this.offset
     const start = this.anchor + Math.max(projectDuration(project), duration - 0.03) - this.offset
@@ -348,6 +350,16 @@ export class AudioEngine {
   }
 
   updateMix(project: Project) {
+    const latencyChanged = project.tracks.some((track) => {
+      const channel = this.channels.get(track.id)
+      return channel && channel.latencyFrames !== pitchFrames(track.effects)
+    })
+    if (latencyChanged && this.stateValue === 'recording')
+      throw new Error(
+        'Termina la toma antes de añadir o quitar afinación. Sus parámetros y bypass sí se pueden ajustar.',
+      )
+    if (latencyChanged && this.stateValue === 'playing')
+      this.schedule(project, this.position, this.getContext().currentTime + 0.06)
     const now = this.context?.currentTime ?? 0
     this.master?.gain.setTargetAtTime(project.masterVolume, now, 0.01)
     for (const track of project.tracks) {
@@ -434,13 +446,15 @@ export class AudioEngine {
           throw new DOMException('Grabación cancelada.', 'AbortError')
         this.connectMonitor(project, trackId)
       }
-      const startFrame = Math.ceil((context.currentTime + 0.12) * context.sampleRate)
+      const sourceFrame = Math.ceil((context.currentTime + 0.12) * context.sampleRate)
+      this.schedule(project, position, sourceFrame / context.sampleRate, false)
+      // Capture begins with the audible, latency-compensated beat, not the earlier DSP input.
+      const startFrame = Math.round(this.anchor * context.sampleRate)
       node.port.postMessage({
         type: 'start',
         startFrame,
         endFrame: startFrame + Math.floor(maxDuration * context.sampleRate),
       })
-      this.schedule(project, position, startFrame / context.sampleRate, false)
       this.stateValue = 'recording'
     } catch (error) {
       this.capture?.disconnect()
@@ -517,34 +531,46 @@ export class AudioEngine {
     if (!audioDuration) throw new Error('Añade audio antes de exportar la mezcla.')
     if (audioDuration > MAX_SECONDS) throw new Error('La sesión supera el límite de 15 minutos.')
     const sampleRate = 48000
-    const offline = new OfflineAudioContext(2, Math.ceil(duration * sampleRate), sampleRate)
+    // prepareEffects on the live context supplies the exact latency reported by the WASM engine.
+    await prepareEffects(this.getContext())
+    const latencyFrames = Math.max(0, ...project.tracks.map((track) => pitchFrames(track.effects)))
+    const latency = latencyFrames / sampleRate
+    const offline = new OfflineAudioContext(
+      2,
+      Math.ceil(duration * sampleRate) + latencyFrames,
+      sampleRate,
+    )
     await prepareEffects(offline)
     const master = offline.createGain()
     master.gain.value = project.masterVolume
     master.connect(offline.destination)
     // A bounded final fade avoids a discontinuity if a long serial delay chain reaches the tail limit.
     if (duration > audioDuration) {
-      master.gain.setValueAtTime(project.masterVolume, Math.max(audioDuration, duration - 0.03))
-      master.gain.linearRampToValueAtTime(0, duration)
+      master.gain.setValueAtTime(
+        project.masterVolume,
+        latency + Math.max(audioDuration, duration - 0.03),
+      )
+      master.gain.linearRampToValueAtTime(0, latency + duration)
     }
     const channelsToDispose: TrackChannel[] = []
+    const clipNodes: { source: AudioBufferSourceNode; level: GainNode }[] = []
     try {
       for (const track of project.tracks) {
-        const channel = createTrackChannel(offline, track, project, master)
+        const channel = createTrackChannel(offline, track, project, master, { latencyFrames })
         channelsToDispose.push(channel)
-        for (const clip of track.clips) {
+        for (const clip of playableClips(track)) {
           const buffer = this.buffers.get(clip.assetId)
-          const window = clipWindow(clip, 0)
-          if (!buffer || !window)
+          if (!buffer)
             throw new Error('Falta el audio de un clip. Vuelve a abrir el proyecto.')
-          const source = offline.createBufferSource()
-          source.buffer = buffer
-          source.connect(channel.input)
-          source.start(window.delay, window.offset, window.duration)
+          const scheduled = scheduleClip(offline, buffer, clip, 0, 0, channel.input)
+          if (scheduled) clipNodes.push(scheduled)
         }
       }
       const result = await offline.startRendering()
-      const channels = [result.getChannelData(0), result.getChannelData(1)]
+      const channels = [
+        result.getChannelData(0).subarray(latencyFrames),
+        result.getChannelData(1).subarray(latencyFrames),
+      ]
       let peak = 0
       channels.forEach((channel) => {
         for (const sample of channel) {
@@ -557,6 +583,7 @@ export class AudioEngine {
       })
       return { blob: new Blob([encodeWav(channels, sampleRate)], { type: 'audio/wav' }), peak }
     } finally {
+      clipNodes.forEach(({ source, level }) => { source.disconnect(); level.disconnect() })
       channelsToDispose.forEach((channel) => channel.dispose())
       master.disconnect()
     }

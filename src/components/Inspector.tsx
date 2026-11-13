@@ -4,6 +4,8 @@ import { audioEngine } from '../audio/AudioEngine'
 import { dbLabel, formatTime, MAX_SECONDS, trackKinds } from '../model/project'
 import { EffectsPanel } from './EffectsPanel'
 import { InputControls } from './InputControls'
+import { TrackOrganization } from './TrackOrganization'
+import { TakesPanel } from './TakesPanel'
 
 export function Inspector({ studio, onClose }: { studio: Studio; onClose: () => void }) {
   const track = studio.selectedTrack
@@ -99,6 +101,7 @@ export function Inspector({ studio, onClose }: { studio: Studio; onClose: () => 
             </div>
           </div>
         </section>
+        <TrackOrganization studio={studio} />
         <InputControls studio={studio} />
         <EffectsPanel key={track.id} studio={studio} />
         <section className="inspector-section" aria-label="Edición de clip">
@@ -176,6 +179,13 @@ export function Inspector({ studio, onClose }: { studio: Studio; onClose: () => 
                 </span>
               </label>
               <p className="microcopy">Recorte reversible; conserva el audio original.</p>
+              <label className="field-label">Volumen del clip · {dbLabel(clip.gain ?? 1)}<input type="range" aria-label="Volumen del clip" min={0} max={2} step={0.01} value={clip.gain ?? 1} disabled={studio.locked} onChange={e => studio.updateClip(clip.id, { gain: Number(e.target.value) })} /></label>
+              <div className="field-grid">
+                <label className="field-label">Fade in (s)<input aria-label="Fade in del clip" type="number" min={0} max={clip.duration} step={0.01} value={Number((clip.fadeIn ?? 0).toFixed(3))} disabled={studio.locked} onChange={e => studio.updateClip(clip.id, { fadeIn: e.target.valueAsNumber })} /></label>
+                <label className="field-label">Fade out (s)<input aria-label="Fade out del clip" type="number" min={0} max={clip.duration} step={0.01} value={Number((clip.fadeOut ?? 0).toFixed(3))} disabled={studio.locked} onChange={e => studio.updateClip(clip.id, { fadeOut: e.target.valueAsNumber })} /></label>
+              </div>
+              <label className="field-label">Mover selección a pista<select aria-label="Mover selección a pista" value={track.id} disabled={studio.locked} onChange={e => studio.moveSelection(studio.selectedClipIds, 0, e.target.value)}>{studio.project.tracks.map(t => <option value={t.id} key={t.id}>{t.name}</option>)}</select></label>
+              <div className="compact-actions"><button className="button" disabled={studio.locked} onClick={studio.splitSelection}>Cortar en cursor</button><button className="button" disabled={studio.locked} onClick={studio.duplicateSelection}>Duplicar selección</button></div>
               <button
                 className="delete-clip"
                 onClick={() => studio.removeClip(clip.id)}
@@ -190,6 +200,7 @@ export function Inspector({ studio, onClose }: { studio: Studio; onClose: () => 
             </p>
           )}
         </section>
+        <TakesPanel studio={studio} />
       </div>
     </aside>
   )

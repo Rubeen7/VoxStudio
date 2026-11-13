@@ -62,6 +62,12 @@ export function InputControls({ studio }: { studio: Studio }) {
             {monitoredTrack ? `Escucha: ${monitoredTrack.name}. ` : ''}
             Usa auriculares: los altavoces pueden provocar acoples. La toma se graba seca.
           </p>
+          {track.effects.some((effect) => effect.type === 'autotune') && (
+            <p className="microcopy">
+              Afinación vocal se aplica al reproducir la toma y al exportar. La escucha del
+              micrófono conserva los demás efectos, sin el retardo del corrector.
+            </p>
+          )}
           <details className="input-options">
             <summary>Dispositivo y latencia</summary>
             <label className="field-label">

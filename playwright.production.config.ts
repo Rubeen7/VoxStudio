@@ -4,7 +4,7 @@ import config from './playwright.config'
 // Exercise the full user flow against the bundled app, including the emitted worklet URL.
 export default defineConfig({
   ...config,
-  grep: /import, edit|effects UI|effect tails and overload|live chain changes|monitoring UI|monitoring permissions|monitoring disconnect/,
+  grep: /import, edit|effects UI|effect tails and overload|live chain changes|monitoring UI|monitoring permissions|monitoring disconnect|pitch UI/,
   use: { ...config.use, baseURL: 'http://127.0.0.1:4173' },
   webServer: {
     command: 'npm run preview -- --host 127.0.0.1 --port 4173 --strictPort',

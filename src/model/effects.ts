@@ -8,6 +8,7 @@
   | 'saturation'
   | 'distortion'
   | 'deesser'
+  | 'autotune'
 export interface AudioEffect {
   id: string
   type: EffectType
@@ -30,6 +31,7 @@ export interface EffectParameter {
   default: number
   unit: string
   logarithmic?: boolean
+  options?: string[]
 }
 const param = (
   key: string,
@@ -46,10 +48,47 @@ const frequency = (key: string, label: string, value: number, min = 20, max = 20
   param(key, label, min, max, 1, value, 'Hz', true)
 export const MAX_EFFECTS = 8
 export const MAX_EFFECT_TAIL = 60
+export const PITCH_KEYS = [
+  'Do',
+  'Do♯',
+  'Re',
+  'Re♯',
+  'Mi',
+  'Fa',
+  'Fa♯',
+  'Sol',
+  'Sol♯',
+  'La',
+  'La♯',
+  'Si',
+]
+export const PITCH_SCALES = ['Mayor', 'Menor natural', 'Cromática']
+export const PITCH_MODES = [
+  { name: 'Natural', retune: 90, amount: 90, humanize: 35 },
+  { name: 'Modern', retune: 25, amount: 100, humanize: 10 },
+  { name: 'Hard Tune', retune: 0, amount: 100, humanize: 0 },
+]
 export const effectDefinitions: Record<
   EffectType,
   { name: string; description: string; parameters: EffectParameter[] }
 > = {
+  autotune: {
+    name: 'Afinación vocal',
+    description:
+      'Corrección monofónica, 70–1000 Hz. Reproducción y WAV; se omite al monitorizar el micrófono. Usa una voz aislada y colócalo antes de reverb y delay.',
+    parameters: [
+      { ...param('key', 'Tonalidad', 0, 11, 1, 0), options: PITCH_KEYS },
+      { ...param('scale', 'Escala', 0, 2, 1, 2), options: PITCH_SCALES },
+      {
+        ...param('mode', 'Modo · punto de partida', 0, 2, 1, 0),
+        options: PITCH_MODES.map((mode) => mode.name),
+      },
+      param('retune', 'Retune Speed', 0, 300, 1, 90, 'ms'),
+      param('amount', 'Amount', 0, 100, 1, 90, '%'),
+      param('humanize', 'Humanize', 0, 100, 1, 35, '%'),
+      mix(100),
+    ],
+  },
   eq: {
     name: 'EQ paramétrico',
     description: 'Tres bandas de campana en serie. Q alto: banda más estrecha.',
@@ -152,10 +191,16 @@ export function createEffect(type: EffectType): AudioEffect {
 export function normalizeEffects(value: unknown): AudioEffect[] {
   if (!Array.isArray(value)) return []
   const ids = new Set<string>()
+  let hasPitch = false
   return value.slice(0, MAX_EFFECTS).flatMap((raw: unknown) => {
     if (!raw || typeof raw !== 'object') return []
     const e = raw as Partial<AudioEffect>
     if (!e.type || !Object.hasOwn(effectDefinitions, e.type)) return []
+    // One pitch detector per track avoids contradictory scales and needless latency/CPU.
+    if (e.type === 'autotune') {
+      if (hasPitch) return []
+      hasPitch = true
+    }
     const id = typeof e.id === 'string' && e.id && !ids.has(e.id) ? e.id : crypto.randomUUID()
     ids.add(id)
     return [
@@ -169,7 +214,7 @@ export function normalizeEffects(value: unknown): AudioEffect[] {
             return [
               p.key,
               typeof value === 'number' && Number.isFinite(value)
-                ? Math.max(p.min, Math.min(p.max, value))
+                ? Math.max(p.min, Math.min(p.max, p.options ? Math.round(value) : value))
                 : p.default,
             ]
           }),
@@ -186,6 +231,7 @@ export function effectTail(effects: AudioEffect[] = []): number {
     MAX_EFFECT_TAIL,
     effects.reduce((sum, e) => {
       if (!e.enabled || e.params.mix === 0) return sum
+      if (e.type === 'autotune') return sum // DSP delay is compensated, not an effect tail.
       if (e.type === 'reverb') return sum + e.params.duration + 0.1
       if (e.type === 'delay') {
         const feedback = e.params.feedback / 100

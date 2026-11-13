@@ -9,7 +9,21 @@ export interface Clip {
   start: number
   offset: number
   duration: number
+  gain?: number
+  fadeIn?: number
+  fadeOut?: number
+  envelope?: { time: number; value: number }[]
+  takeGroupId?: string
 }
+
+export interface TakeGroup {
+  id: string
+  name: string
+  start: number
+  duration: number
+  activeTakeId: string
+}
+export interface Marker { id: string; name: string; time: number }
 
 export interface Track {
   id: string
@@ -22,10 +36,14 @@ export interface Track {
   solo: boolean
   clips: Clip[]
   effects: AudioEffect[]
+  takeGroups?: TakeGroup[]
+  hidden?: boolean
+  collapsed?: boolean
+  group?: string
 }
 
 export interface Project {
-  version: 2
+  version: 3
   id: string
   name: string
   bpm: number
@@ -33,6 +51,8 @@ export interface Project {
   createdAt: number
   updatedAt: number
   tracks: Track[]
+  markers?: Marker[]
+  timeline?: { scale: number; snap: boolean; grid: number }
 }
 
 export interface AudioAsset {
@@ -72,7 +92,7 @@ export function createTrack(kind: TrackKind): Track {
 
 export function createProject(): Project {
   return {
-    version: 2,
+    version: 3,
     id: crypto.randomUUID(),
     name: 'Mi primera sesión',
     bpm: 90,
@@ -84,7 +104,15 @@ export function createProject(): Project {
 }
 
 export function projectDuration(project: Project): number {
-  return Math.max(0, ...project.tracks.flatMap((t) => t.clips.map((c) => c.start + c.duration)))
+  return Math.max(0, ...project.tracks.flatMap((t) => playableClips(t).map((c) => c.start + c.duration)))
+}
+
+/** Alternatives remain in the project, but only the chosen take enters the audio graph. */
+export function playableClips(track: Track) {
+  return track.clips.filter(clip => {
+    const group = track.takeGroups?.find(group => group.id === clip.takeGroupId)
+    return !group || group.activeTakeId === clip.id
+  })
 }
 
 export function isAudible(track: Track, tracks: Track[]): boolean {
@@ -96,7 +124,7 @@ export function projectPlaybackDuration(project: Project): number {
     projectDuration(project),
     ...project.tracks.map((track) =>
       track.clips.length && isAudible(track, project.tracks)
-        ? Math.max(...track.clips.map((clip) => clip.start + clip.duration)) +
+        ? Math.max(0, ...playableClips(track).map((clip) => clip.start + clip.duration)) +
           effectTail(track.effects)
         : 0,
     ),
@@ -106,11 +134,11 @@ export function projectPlaybackDuration(project: Project): number {
 /** Version 1 sessions keep their audio, timing and mixer values; effects start empty. */
 export function migrateProject(project: Project): Project {
   const version: number = project.version
-  if (version !== 1 && version !== 2)
+  if (version !== 1 && version !== 2 && version !== 3)
     throw new Error('La versión de este proyecto no es compatible.')
   return {
     ...project,
-    version: 2,
+    version: 3,
     tracks: project.tracks.map((track) => ({ ...track, effects: normalizeEffects(track.effects) })),
   }
 }
